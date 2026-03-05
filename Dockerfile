@@ -24,7 +24,8 @@ RUN go mod download
 
 COPY . .
 
-RUN make generate
+RUN buf export buf.build/agynio/api --output internal/.proto && \
+    buf generate internal/.proto --template ./buf.gen.yaml
 
 RUN go build -o /out/notifications ./cmd/notifications
 

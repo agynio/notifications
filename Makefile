@@ -7,7 +7,8 @@ ROOT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 all: build
 
 generate:
-	$(ROOT_DIR)/scripts/generate.sh
+	buf export buf.build/agynio/api --output internal/.proto
+	buf generate internal/.proto --template ./buf.gen.yaml
 
 build:
 	GOFLAGS=-mod=mod go build ./...

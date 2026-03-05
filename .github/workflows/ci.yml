@@ -39,7 +39,9 @@ jobs:
         run: echo "${{ github.workspace }}/bin" >> "$GITHUB_PATH"
 
       - name: Generate protobuf bindings
-        run: make generate
+        run: |
+          buf export buf.build/agynio/api --output internal/.proto
+          buf generate internal/.proto --template ./buf.gen.yaml
 
       - name: Run tests
         run: go test ./...
