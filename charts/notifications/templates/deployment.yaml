@@ -36,7 +36,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: NOTIFICATIONS_GRPC_ADDR
-              value: {{ printf "0.0.0.0:%d" (.Values.service.port | int) | quote }}
+              value: {{ printf "0.0.0.0:%d" (int .Values.service.port) | quote }}
             - name: NOTIFICATIONS_REDIS_URL
               value: {{ required "NOTIFICATIONS_REDIS_URL must be provided" .Values.NOTIFICATIONS_REDIS_URL | quote }}
             - name: NOTIFICATIONS_CHANNEL

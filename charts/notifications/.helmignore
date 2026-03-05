@@ -1,11 +1,8 @@
-# Common Helm ignores
+# Exclude common artifacts
 .DS_Store
-# Git
 .git/
 .gitignore
-# Others
 *.swp
 *.bak
 *.tmp
 *.orig
-*.rej
