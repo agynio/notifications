@@ -1,4 +1,5 @@
-1. The notifications service has been deployed.
-2. Verify the service status:
+1. Notifications service is deployed.
+2. Check the pods status:
    kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
-3. The gRPC endpoint is exposed on port {{ .Values.service.port }} via the {{ include "notifications.fullname" . }} service.
+3. Access the gRPC service via kubectl port-forward:
+   kubectl port-forward svc/{{ include "notifications.fullname" . }} 9090:9090

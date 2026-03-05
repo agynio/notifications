@@ -1,0 +1,8 @@
+# Example overrides for local development
+image:
+  repository: agynio/notifications
+  tag: dev
+
+service:
+  type: ClusterIP
+  port: 9090
