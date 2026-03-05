@@ -1,9 +1,3 @@
-{{- $grpcAddr := printf "0.0.0.0:%d" (.Values.service.port | int) -}}
-{{- $redisURL := required "NOTIFICATIONS_REDIS_URL must be provided" .Values.NOTIFICATIONS_REDIS_URL -}}
-{{- $parsedRedis := urlParse $redisURL -}}
-{{- $redisAddr := toString (index $parsedRedis "host") -}}
-{{- $redisDBPath := trimPrefix "/" (toString (default "" (index $parsedRedis "path"))) -}}
-{{- $redisDB := default "0" $redisDBPath -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -40,21 +34,6 @@ spec:
         - name: notifications
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          env:
-            - name: GRPC_ADDR
-              value: {{ $grpcAddr | quote }}
-            - name: REDIS_ADDR
-              value: {{ $redisAddr | quote }}
-            - name: REDIS_DB
-              value: {{ $redisDB | quote }}
-            - name: REDIS_CHANNEL
-              value: {{ .Values.NOTIFICATIONS_CHANNEL | quote }}
-            - name: NOTIFICATIONS_GRPC_ADDR
-              value: {{ $grpcAddr | quote }}
-            - name: NOTIFICATIONS_REDIS_URL
-              value: {{ $redisURL | quote }}
-            - name: NOTIFICATIONS_CHANNEL
-              value: {{ .Values.NOTIFICATIONS_CHANNEL | quote }}
           ports:
             - name: grpc
               containerPort: {{ .Values.service.port }}

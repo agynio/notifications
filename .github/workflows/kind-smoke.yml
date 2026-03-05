@@ -77,10 +77,15 @@ jobs:
         run: |
           helm upgrade --install notifications ./charts/notifications \
             --set image.repository="$IMAGE" \
-            --set image.tag="$TAG" \
-            --set NOTIFICATIONS_REDIS_URL=redis://notifications-redis-master:6379/0 \
-            --wait
-          kubectl wait --for=condition=available deployment/notifications --timeout=180s
+            --set image.tag="$TAG"
+
+      - name: Bootstrap environment configuration
+        run: |
+          until kubectl get deployment/notifications >/dev/null 2>&1; do
+            sleep 2
+          done
+          kubectl apply -f bootstrap/notifications-env.yaml
+          kubectl rollout status deployment/notifications --timeout=180s
 
       - name: Smoke test
         env:

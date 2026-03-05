@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notifications
+  namespace: default
+spec:
+  template:
+    spec:
+      containers:
+        - name: notifications
+          env:
+            - name: GRPC_ADDR
+              value: 0.0.0.0:9090
+            - name: REDIS_ADDR
+              value: notifications-redis-master.default.svc.cluster.local:6379
+            - name: REDIS_DB
+              value: "0"
+            - name: REDIS_CHANNEL
+              value: notifications.v1

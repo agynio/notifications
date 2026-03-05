@@ -35,9 +35,6 @@ tolerations: []
 
 affinity: {}
 
-NOTIFICATIONS_REDIS_URL: ""
-NOTIFICATIONS_CHANNEL: notifications.v1
-
 probes:
   liveness:
     enabled: true

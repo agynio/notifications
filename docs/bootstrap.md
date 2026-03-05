@@ -32,34 +32,49 @@ eval "$(minikube docker-env)"
 docker build -t agynio/notifications:dev .
 ```
 
-## 3. Install Redis
+## 3. Install Redis (separately)
+
+The notifications chart does **not** deploy Redis. Install one with your preferred
+method; for local development the Bitnami chart is convenient:
 
 ```bash
 helm repo add bitnami https://charts.bitnami.com/bitnami
 helm upgrade --install notifications-redis bitnami/redis \
+  --set architecture=standalone \
   --set auth.enabled=false \
   --wait
 ```
 
 ## 4. Deploy notifications via Helm
 
-Use the provided example values file as a starting point:
+The chart installs the service without environment configuration. Supply your image
+overrides (if needed) using the example values file:
 
 ```bash
 helm upgrade --install notifications ./charts/notifications \
   -f charts/notifications/values.local.yaml \
-  --set image.tag=dev \
-  --set NOTIFICATIONS_REDIS_URL=redis://notifications-redis-master:6379/0
+  --set image.tag=dev
 ```
 
-## 5. Port-forward the services
+## 5. Apply bootstrap environment patch
+
+The deployment expects gRPC and Redis configuration via environment variables.
+Apply the provided patch manifest (adjust the Redis address if you installed it in
+a different namespace or with another release name):
+
+```bash
+kubectl apply -f bootstrap/notifications-env.yaml
+kubectl rollout status deployment/notifications
+```
+
+## 6. Port-forward the services
 
 ```bash
 kubectl port-forward svc/notifications 9090:9090 &
 kubectl port-forward svc/notifications-redis-master 6379:6379 &
 ```
 
-## 6. Smoke test (optional)
+## 7. Smoke test (optional)
 
 Set the expected environment variables and run the smoke harness:
 
