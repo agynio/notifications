@@ -1,12 +1,11 @@
 # Notifications Service
 
-## Proto generation (no committed code)
+## Generating protobufs locally
 
-From the repository root, run:
+Run the following before building or testing locally to ensure the latest API definitions are available:
 
 ```bash
-buf export buf.build/agynio/api --output internal/.proto
-buf generate internal/.proto --template ./buf.gen.yaml
+make proto
 ```
 
-The generated sources in `internal/.proto` and `internal/.gen` are ignored by git.
+This command runs Buf to fetch the API definitions and generate Go bindings. The directories `internal/.proto` and `internal/.gen` are git-ignored and must not be committed. CI and the Docker build already execute the same generation steps automatically.

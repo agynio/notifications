@@ -2,13 +2,16 @@ SHELL := /bin/bash
 
 ROOT_DIR := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 
-.PHONY: all generate build test lint fmt
+PROTO_DIR := internal/.proto
+BUF_TEMPLATE := ./buf.gen.yaml
+
+.PHONY: all proto build test lint fmt clean
 
 all: build
 
-generate:
-	buf export buf.build/agynio/api --output internal/.proto
-	buf generate internal/.proto --template ./buf.gen.yaml
+proto:
+	buf export buf.build/agynio/api --output $(PROTO_DIR)
+	buf generate $(PROTO_DIR) --template $(BUF_TEMPLATE)
 
 build:
 	GOFLAGS=-mod=mod go build ./...
@@ -21,3 +24,6 @@ lint:
 
 fmt:
 	gofmt -w $(shell find . -type f -name '*.go')
+
+clean:
+	rm -rf $(PROTO_DIR) internal/.gen
