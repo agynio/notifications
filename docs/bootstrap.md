@@ -70,7 +70,7 @@ kubectl rollout status deployment/notifications
 ## 6. Port-forward the services
 
 ```bash
-kubectl port-forward svc/notifications 9090:9090 &
+kubectl port-forward svc/notifications 50051:50051 &
 kubectl port-forward svc/notifications-redis-master 6379:6379 &
 ```
 
@@ -79,7 +79,7 @@ kubectl port-forward svc/notifications-redis-master 6379:6379 &
 Set the expected environment variables and run the smoke harness:
 
 ```bash
-SMOKE_GRPC_ADDR=localhost:9090 \
+SMOKE_GRPC_ADDR=localhost:50051 \
 SMOKE_REDIS_ADDR=redis://localhost:6379/0 \
 go test ./test/smoke -run TestSmoke -count=1
 ```

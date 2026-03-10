@@ -34,7 +34,7 @@ helm install notifications oci://ghcr.io/agynio/charts/notifications \
 | `NOTIFICATIONS_REDIS_URL` | `""` | Redis connection string (**required**). |
 | `NOTIFICATIONS_CHANNEL` | `notifications.v1` | Redis channel for published events. |
 | `service.type` | `ClusterIP` | Kubernetes service type. |
-| `service.port` | `9090` | Service and container port for gRPC traffic. |
+| `service.port` | `50051` | Service and container port for gRPC traffic. |
 | `resources` | `{}` | Container resource requests/limits. |
 | `nodeSelector` | `{}` | Node selector rules. |
 | `tolerations` | `[]` | Pod tolerations. |
