@@ -89,11 +89,11 @@ jobs:
 
       - name: Smoke test
         env:
-          SMOKE_GRPC_ADDR: localhost:9090
+          SMOKE_GRPC_ADDR: localhost:50051
           SMOKE_REDIS_ADDR: redis://localhost:6379/0
           SMOKE_CHANNEL: notifications.v1
         run: |
-          kubectl port-forward svc/notifications 9090:9090 &
+          kubectl port-forward svc/notifications 50051:50051 &
           PF_NOTIFICATIONS=$!
           kubectl port-forward svc/notifications-redis-master 6379:6379 &
           PF_REDIS=$!
