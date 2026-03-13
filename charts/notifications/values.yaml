@@ -5,6 +5,8 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
+env: []
+
 imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
