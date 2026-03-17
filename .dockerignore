@@ -1,0 +1,7 @@
+.git/
+.devspace/
+.github/
+charts/
+tmp/
+internal/.gen/
+*.md

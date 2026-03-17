@@ -38,7 +38,7 @@ functions:
               emptyDir: {}
           containers:
             - name: notifications
-              image: ghcr.io/agynio/devcontainer-go:1
+              image: ghcr.io/agynio/devcontainer-go:1 # keep in sync with E2E_IMAGE
               workingDir: /opt/app/data
               command:
                 - sh
