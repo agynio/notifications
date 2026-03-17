@@ -4,3 +4,10 @@ description: Helm chart for the agynio notifications gRPC service
 type: application
 version: 0.2.0
 appVersion: 0.2.0
+home: https://github.com/agynio/notifications
+sources:
+  - https://github.com/agynio/notifications
+dependencies:
+  - name: service-base
+    version: ">=0.1.4 <1.0.0"
+    repository: oci://ghcr.io/agynio/charts

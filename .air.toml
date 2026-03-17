@@ -1,0 +1,12 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  cmd = "go build -o ./tmp/notifications ./cmd/notifications"
+  bin = "./tmp/notifications"
+  include_ext = ["go", "yaml"]
+  exclude_dir = ["internal/.gen", ".git", "tmp", ".devspace", "charts"]
+  delay = 1000
+
+[log]
+  time = false

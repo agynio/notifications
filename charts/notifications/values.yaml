@@ -1,62 +1,162 @@
-replicaCount: 1
-
-image:
-  repository: ghcr.io/agynio/notifications
-  tag: ""
-  pullPolicy: IfNotPresent
-
-env: []
-
-imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+image:
+  registry: ""
+  repository: ghcr.io/agynio/notifications
+  tag: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+replicaCount: 1
+revisionHistoryLimit: 10
+updateStrategy: {}
+
+deploymentAnnotations: {}
+
 serviceAccount:
   create: true
-  annotations: {}
   name: ""
+  annotations: {}
+
+automountServiceAccountToken: true
+
+rbac:
+  create: false
+  clusterWide: false
+  rules: []
 
 podAnnotations: {}
 podLabels: {}
 
-podSecurityContext: {}
+podSecurityContext:
+  enabled: false
+  fsGroup: null
 
-securityContext: {}
+securityContext:
+  enabled: true
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  seccompProfile:
+    type: RuntimeDefault
+
+priorityClassName: ""
+terminationGracePeriodSeconds: null
 
 service:
+  enabled: true
   type: ClusterIP
-  port: 50051
   annotations: {}
   labels: {}
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+      protocol: TCP
+
+containerPorts:
+  - name: grpc
+    containerPort: 50051
+    protocol: TCP
+
+command: []
+args: []
+env:
+  - name: GRPC_ADDR
+    value: "0.0.0.0:50051"
+  - name: REDIS_ADDR
+    value: "notifications-redis-master:6379"
+  - name: REDIS_DB
+    value: "0"
+  - name: REDIS_CHANNEL
+    value: "notifications.v1"
+envFrom: []
+extraEnvVars: []
+extraEnvVarsCM: ""
+extraEnvVarsSecret: ""
+
+configMounts: []
+extraVolumeMounts: []
+extraVolumes: []
+
+initContainers: []
+extraContainers: []
+
+lifecycle: {}
+
+livenessProbe:
+  enabled: true
+  tcpSocket:
+    port: grpc
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 1
+  failureThreshold: 3
+  successThreshold: 1
+
+readinessProbe:
+  enabled: true
+  tcpSocket:
+    port: grpc
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 1
+  failureThreshold: 3
+  successThreshold: 1
+
+startupProbe:
+  enabled: false
 
 resources: {}
 
 nodeSelector: {}
-
 tolerations: []
-
 affinity: {}
+topologySpreadConstraints: []
 
-probes:
-  liveness:
-    enabled: true
-    initialDelaySeconds: 10
-    periodSeconds: 10
-    timeoutSeconds: 1
-    failureThreshold: 3
-    successThreshold: 1
-  readiness:
-    enabled: true
-    initialDelaySeconds: 5
-    periodSeconds: 10
-    timeoutSeconds: 1
-    failureThreshold: 3
-    successThreshold: 1
-
-serviceMonitor:
+autoscaling:
   enabled: false
-  namespace: ""
-  interval: 30s
-  scrapeTimeout: ""
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: null
+  metrics: []
+  behavior: {}
+
+pdb:
+  enabled: false
+  minAvailable: null
+  maxUnavailable: null
+
+ingress:
+  enabled: false
+  ingressClassName: ""
   annotations: {}
-  additionalLabels: {}
+  hosts: []
+  tls: []
+
+metrics:
+  enabled: false
+  serviceMonitor:
+    enabled: false
+    namespace: ""
+    interval: ""
+    scrapeTimeout: ""
+    honorLabels: false
+    labels: {}
+    annotations: {}
+    relabelings: []
+    metricRelabelings: []
+    endpoints:
+      - port: grpc
+        path: /metrics
+        interval: ""
+        scrapeTimeout: ""

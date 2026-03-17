@@ -1,36 +1,28 @@
-FROM golang:1.22 AS builder
+# syntax=docker/dockerfile:1
+ARG GO_VERSION=1.22
+ARG BUF_VERSION=1.64.0
 
-ENV CGO_ENABLED=0 \
-    GOOS=linux \
-    GOARCH=amd64 \
-    GOBIN=/usr/local/bin
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS buf
+ARG BUF_VERSION
+RUN apk add --no-cache curl
+RUN curl -sSL \
+      "https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}/buf-$(uname -s)-$(uname -m)" \
+      -o /usr/local/bin/buf && \
+    chmod +x /usr/local/bin/buf
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    curl \
-    protobuf-compiler && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN curl -sSL https://github.com/bufbuild/buf/releases/download/v1.64.0/buf-Linux-x86_64.tar.gz \
-      | tar -xzf - -C /usr/local --strip-components=1 buf/bin/buf
-
-RUN go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2 && \
-    go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
-
-WORKDIR /workspace
-
+FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS build
+WORKDIR /src
+COPY --from=buf /usr/local/bin/buf /usr/local/bin/buf
 COPY go.mod go.sum ./
 RUN go mod download
-
+COPY buf.gen.yaml ./
+RUN buf generate buf.build/agynio/api --template ./buf.gen.yaml
 COPY . .
-
-RUN buf export buf.build/agynio/api --output internal/.proto && \
-    buf generate internal/.proto --template ./buf.gen.yaml
-
+ARG TARGETOS TARGETARCH
+ENV CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH
 RUN go build -o /out/notifications ./cmd/notifications
 
-FROM gcr.io/distroless/static-debian12
-
-COPY --from=builder /out/notifications /bin/notifications
-
-ENTRYPOINT ["/bin/notifications"]
+FROM alpine:3.19
+WORKDIR /app
+COPY --from=build /out/notifications /app/notifications
+ENTRYPOINT ["/app/notifications"]

@@ -2,4 +2,4 @@
 2. Check the pods status:
    kubectl get pods -l app.kubernetes.io/instance={{ .Release.Name }}
 3. Access the gRPC service via kubectl port-forward:
-   kubectl port-forward svc/{{ include "notifications.fullname" . }} 50051:50051
+   kubectl port-forward svc/{{ include "service-base.fullname" . }} 50051:50051

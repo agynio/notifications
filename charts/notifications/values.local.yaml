@@ -2,7 +2,3 @@
 image:
   repository: agynio/notifications
   tag: dev
-
-service:
-  type: ClusterIP
-  port: 50051

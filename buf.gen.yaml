@@ -1,14 +1,17 @@
-version: v1
+version: v2
+
 managed:
   enabled: true
-  go_package_prefix:
-    default: github.com/agynio/notifications/internal/.gen
+  override:
+    - file_option: go_package_prefix
+      value: github.com/agynio/notifications/internal/.gen
+
 plugins:
-  - name: go
+  - remote: buf.build/protocolbuffers/go
     out: internal/.gen
     opt:
       - paths=source_relative
-  - name: go-grpc
+  - remote: buf.build/grpc/go
     out: internal/.gen
     opt:
       - paths=source_relative
