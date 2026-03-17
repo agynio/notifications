@@ -10,10 +10,10 @@ cluster (Kind or Minikube) using the provided Helm chart.
 - A running Kind or Minikube cluster
 - Access to the notifications container image (built locally or pulled from GHCR)
 
-## 1. Export and generate protobufs
+## 1. Generate protobufs
 
 ```bash
-make proto
+buf generate buf.build/agynio/api --template ./buf.gen.yaml
 ```
 
 ## 2. Build and load the container image
@@ -74,14 +74,16 @@ kubectl port-forward svc/notifications 50051:50051 &
 kubectl port-forward svc/notifications-redis-master 6379:6379 &
 ```
 
-## 7. Smoke test (optional)
+## 7. E2E test (optional)
 
 Set the expected environment variables and run the smoke harness:
 
 ```bash
-SMOKE_GRPC_ADDR=localhost:50051 \
-SMOKE_REDIS_ADDR=redis://localhost:6379/0 \
-go test ./test/smoke -run TestSmoke -count=1
+NOTIFICATIONS_GRPC_ADDR=localhost:50051 \
+NOTIFICATIONS_REDIS_ADDR=localhost:6379 \
+NOTIFICATIONS_REDIS_DB=0 \
+NOTIFICATIONS_CHANNEL=notifications.v1 \
+go test -tags e2e ./test/e2e -run TestSmoke -count=1
 ```
 
 Kill the background port-forward processes when finished.

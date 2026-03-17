@@ -1,0 +1,189 @@
+version: v2beta1
+
+vars:
+  NOTIFICATIONS_NAMESPACE: platform
+  E2E_IMAGE: ghcr.io/agynio/devcontainer-go:1
+
+functions:
+  disable_argocd_sync: |-
+    if kubectl get application notifications -n argocd >/dev/null 2>&1; then
+      echo "Disabling ArgoCD auto-sync for notifications..."
+      kubectl patch application notifications -n argocd \
+        --type merge \
+        -p '{"spec":{"syncPolicy":{"automated":null}}}'
+      echo "ArgoCD auto-sync disabled."
+    else
+      echo "WARNING: ArgoCD Application 'notifications' not found in argocd namespace."
+    fi
+  restore_argocd_sync: &restore_argocd_sync |-
+    if kubectl get application notifications -n argocd >/dev/null 2>&1; then
+      echo "Re-enabling ArgoCD auto-sync for notifications..."
+      kubectl patch application notifications -n argocd \
+        --type merge \
+        -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
+      echo "ArgoCD auto-sync restored."
+    fi
+  patch_deployment: |-
+    echo "Patching notifications deployment for DevSpace..."
+    kubectl patch deployment notifications -n ${NOTIFICATIONS_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsUser: 1000
+            fsGroup: 1000
+          initContainers: []
+          volumes:
+            - name: data
+              emptyDir: {}
+          containers:
+            - name: notifications
+              image: ghcr.io/agynio/devcontainer-go:1
+              workingDir: /opt/app/data
+              command:
+                - sh
+                - -c
+                - |
+                  set -eu
+                  elapsed=0
+                  while [ ! -f /opt/app/data/go.mod ]; do
+                    sleep 1; elapsed=$((elapsed + 1))
+                    [ "$elapsed" -ge 120 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
+                  done
+                  exec /opt/app/data/scripts/devspace-startup.sh
+              volumeMounts:
+                - name: data
+                  mountPath: /opt/app/data
+              resources:
+                requests:
+                  cpu: 500m
+                  memory: 1Gi
+                limits:
+                  cpu: "2"
+                  memory: 4Gi
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 1000
+                runAsGroup: 1000
+                readOnlyRootFilesystem: false
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
+                seccompProfile:
+                  type: RuntimeDefault
+    EOF
+    )"
+
+deployments:
+  e2e-runner:
+    namespace: ${NOTIFICATIONS_NAMESPACE}
+    helm:
+      chart:
+        name: component-chart
+        repo: https://charts.devspace.sh
+      values:
+        containers:
+          - image: ${E2E_IMAGE}
+        labels:
+          app.kubernetes.io/name: notifications-e2e
+
+commands:
+  test:e2e: |-
+    devspace run-pipeline test:e2e $@
+
+pipelines:
+  dev:
+    flags:
+      - name: watch
+        short: w
+        description: "Keep DevSpace running and stream logs"
+    run: |-
+      disable_argocd_sync
+      patch_deployment
+      if [ "$(get_flag "watch")" == "true" ]; then
+        start_dev --disable-pod-replace notifications
+      else
+        start_dev --disable-pod-replace notifications
+        echo "Waiting for notifications to be healthy on :50051..."
+        healthy=false
+        for i in $(seq 1 60); do
+          if exec_container --label-selector=app.kubernetes.io/name=notifications -n ${NOTIFICATIONS_NAMESPACE} -- bash -c 'nc -z localhost 50051 >/dev/null 2>&1 || (echo > /dev/tcp/localhost/50051) >/dev/null 2>&1'; then
+            healthy=true
+            break
+          fi
+          sleep 2
+        done
+        if [ "$healthy" != "true" ]; then
+          echo "ERROR: Notifications did not become healthy within 120s" >&2
+          exit 1
+        fi
+        echo "Dev environment ready. Stopping dev session."
+        stop_dev notifications
+      fi
+
+  test:e2e:
+    run: |-
+      create_deployments e2e-runner
+      start_dev e2e-runner &
+      sleep 5
+      exec_container \
+        --label-selector "app.kubernetes.io/name=notifications-e2e" \
+        -n ${NOTIFICATIONS_NAMESPACE} \
+        -- bash -c 'cd /opt/app/data && buf generate buf.build/agynio/api --template ./buf.gen.yaml && go test -v -count=1 -tags e2e ./test/e2e/'
+      EXIT_CODE=$?
+      stop_dev e2e-runner
+      purge_deployments e2e-runner
+      exit $EXIT_CODE
+
+hooks:
+  - name: restore-argocd-auto-sync
+    events:
+      - after:dev:notifications
+    command: bash
+    args:
+      - -c
+      - *restore_argocd_sync
+
+dev:
+  notifications:
+    namespace: ${NOTIFICATIONS_NAMESPACE}
+    labelSelector:
+      app.kubernetes.io/name: notifications
+      app.kubernetes.io/instance: notifications
+    containers:
+      notifications:
+        container: notifications
+        sync:
+          - path: ./:/opt/app/data
+            excludePaths:
+              - .git/
+              - .devspace/
+              - /internal/.gen/
+              - /tmp/
+            uploadExcludePaths:
+              - .git/
+              - .devspace/
+              - /internal/.gen/
+              - /tmp/
+            downloadExcludePaths:
+              - .git/
+              - .devspace/
+              - /internal/.gen/
+              - /tmp/
+        logs:
+          enabled: true
+          lastLines: 200
+    ports:
+      - port: "50051"
+
+  e2e-runner:
+    namespace: ${NOTIFICATIONS_NAMESPACE}
+    labelSelector:
+      app.kubernetes.io/name: notifications-e2e
+    command: ["sleep", "infinity"]
+    workingDir: /opt/app/data
+    sync:
+      - path: ./:/opt/app/data
+        excludePaths:
+          - .git/
+          - .devspace/

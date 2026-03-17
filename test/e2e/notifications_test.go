@@ -1,8 +1,12 @@
-package smoke
+//go:build e2e
+
+package e2e
 
 import (
 	"context"
 	"os"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,17 +25,13 @@ const (
 )
 
 func TestSmoke(t *testing.T) {
-	grpcAddr := os.Getenv("SMOKE_GRPC_ADDR")
-	redisAddr := os.Getenv("SMOKE_REDIS_ADDR")
-
-	if grpcAddr == "" || redisAddr == "" {
-		t.Skip("smoke test requires SMOKE_GRPC_ADDR and SMOKE_REDIS_ADDR")
+	grpcAddr := envOrDefault("NOTIFICATIONS_GRPC_ADDR", "notifications:50051")
+	redisAddr := envOrDefault("NOTIFICATIONS_REDIS_ADDR", "notifications-redis-master:6379")
+	redisDB, err := envIntOrDefault("NOTIFICATIONS_REDIS_DB", 0)
+	if err != nil {
+		t.Fatalf("parse NOTIFICATIONS_REDIS_DB: %v", err)
 	}
-
-	channel := os.Getenv("SMOKE_CHANNEL")
-	if channel == "" {
-		channel = defaultChannel
-	}
+	channel := envOrDefault("NOTIFICATIONS_CHANNEL", defaultChannel)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -44,12 +44,7 @@ func TestSmoke(t *testing.T) {
 
 	client := notificationsv1.NewNotificationsServiceClient(conn)
 
-	opt, err := redis.ParseURL(redisAddr)
-	if err != nil {
-		t.Fatalf("parse redis url: %v", err)
-	}
-
-	rdb := redis.NewClient(opt)
+	rdb := redis.NewClient(&redis.Options{Addr: redisAddr, DB: redisDB})
 	defer func() {
 		_ = rdb.Close()
 	}()
@@ -164,4 +159,32 @@ func testPublishEnqueuesEnvelopeToRedis(t *testing.T, ctx context.Context, clien
 	if len(received.GetRooms()) == 0 || received.GetRooms()[0] != "smoke" {
 		t.Fatalf("unexpected rooms: %v", received.GetRooms())
 	}
+}
+
+func envOrDefault(key, fallback string) string {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
+}
+
+func envIntOrDefault(key string, fallback int) (int, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback, nil
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback, nil
+	}
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, err
+	}
+	return parsed, nil
 }
