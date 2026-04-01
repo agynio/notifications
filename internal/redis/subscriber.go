@@ -163,7 +163,7 @@ func (s *Subscriber) subscribeWithRetry(ctx context.Context) (pubSub, error) {
 	}
 
 	if pubsub == nil {
-		return nil, fmt.Errorf("redis subscribe failed")
+		panic("subscribeWithRetry: WithBackoff succeeded but pubsub is nil")
 	}
 
 	return pubsub, nil

@@ -30,6 +30,10 @@ type OnRetry func(State)
 // WithBackoff retries the operation using exponential backoff until success,
 // context cancellation, or the maximum number of attempts is reached.
 func WithBackoff(ctx context.Context, cfg Config, operation Operation, onRetry OnRetry) error {
+	if cfg.MaxAttempts < 1 {
+		return fmt.Errorf("retry: MaxAttempts must be >= 1, got %d", cfg.MaxAttempts)
+	}
+
 	backoff := cfg.InitialBackoff
 	var lastErr error
 
@@ -79,8 +83,5 @@ func WithBackoff(ctx context.Context, cfg Config, operation Operation, onRetry O
 		}
 	}
 
-	if lastErr == nil {
-		return fmt.Errorf("retry failed without error")
-	}
 	return lastErr
 }
