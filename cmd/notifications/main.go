@@ -23,6 +23,13 @@ import (
 	"github.com/agynio/notifications/internal/stream"
 )
 
+const (
+	redisRetryMaxAttempts    = 15
+	redisRetryInitialBackoff = 500 * time.Millisecond
+	redisRetryMaxBackoff     = 5 * time.Second
+	redisPingTimeout         = 3 * time.Second
+)
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "notifications service failed: %v\n", err)
@@ -59,7 +66,7 @@ func run() error {
 	})
 	defer func() { _ = subClient.Close() }()
 
-	if err := ensureRedis(ctx, pubClient); err != nil {
+	if err := ensureRedis(ctx, logger, pubClient); err != nil {
 		return err
 	}
 
@@ -135,11 +142,58 @@ func run() error {
 	return nil
 }
 
-func ensureRedis(ctx context.Context, client *redis.Client) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("redis ping: %w", err)
+func ensureRedis(ctx context.Context, logger *zap.Logger, client *redis.Client) error {
+	backoff := redisRetryInitialBackoff
+	var lastErr error
+	for attempt := 1; attempt <= redisRetryMaxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		pingCtx, cancel := context.WithTimeout(ctx, redisPingTimeout)
+		err := client.Ping(pingCtx).Err()
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt == redisRetryMaxAttempts {
+			break
+		}
+
+		delay := backoff
+		if delay > redisRetryMaxBackoff {
+			delay = redisRetryMaxBackoff
+		}
+
+		if logger != nil {
+			logger.Warn(
+				"redis ping failed, retrying",
+				zap.Int("attempt", attempt),
+				zap.Int("max_attempts", redisRetryMaxAttempts),
+				zap.Duration("backoff", delay),
+				zap.Error(err),
+			)
+		}
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+
+		backoff *= 2
+		if backoff > redisRetryMaxBackoff {
+			backoff = redisRetryMaxBackoff
+		}
 	}
-	return nil
+
+	if lastErr == nil {
+		return fmt.Errorf("redis ping: unknown error")
+	}
+	return fmt.Errorf("redis ping: %w", lastErr)
 }
