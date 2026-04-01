@@ -23,6 +23,8 @@ ENV CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH
 RUN go build -o /out/notifications ./cmd/notifications
 
 FROM alpine:3.19
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 WORKDIR /app
 COPY --from=build /out/notifications /app/notifications
+USER appuser
 ENTRYPOINT ["/app/notifications"]
