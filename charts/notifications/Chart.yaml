@@ -2,8 +2,8 @@ apiVersion: v2
 name: notifications
 description: Helm chart for the agynio notifications gRPC service
 type: application
-version: 0.2.0
-appVersion: 0.2.0
+version: 0.2.2
+appVersion: 0.2.2
 home: https://github.com/agynio/notifications
 sources:
   - https://github.com/agynio/notifications
