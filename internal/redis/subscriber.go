@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
+	"github.com/agynio/notifications/internal/retry"
 )
 
 const (
@@ -129,62 +130,43 @@ func (s *Subscriber) Start(ctx context.Context) error {
 }
 
 func (s *Subscriber) subscribeWithRetry(ctx context.Context) (pubSub, error) {
-	backoff := subscribeRetryInitialBackoff
-	var lastErr error
-
-	for attempt := 1; attempt <= subscribeRetryMaxAttempts; attempt++ {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+	var pubsub pubSub
+	config := retry.Config{
+		MaxAttempts:    subscribeRetryMaxAttempts,
+		InitialBackoff: subscribeRetryInitialBackoff,
+		MaxBackoff:     subscribeRetryMaxBackoff,
+	}
+	if err := retry.WithBackoff(ctx, config, func(ctx context.Context) error {
+		current := s.client.Subscribe(ctx, s.channel)
+		if current == nil {
+			return fmt.Errorf("redis subscribe returned nil pubsub")
 		}
-
-		pubsub := s.client.Subscribe(ctx, s.channel)
-		if pubsub == nil {
-			lastErr = fmt.Errorf("redis subscribe returned nil pubsub")
-		} else if _, err := pubsub.Receive(ctx); err != nil {
-			_ = pubsub.Close()
-			lastErr = fmt.Errorf("redis receive subscription ack: %w", err)
-		} else {
-			return pubsub, nil
+		if _, err := current.Receive(ctx); err != nil {
+			_ = current.Close()
+			return fmt.Errorf("redis receive subscription ack: %w", err)
 		}
-
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		if attempt == subscribeRetryMaxAttempts {
-			break
-		}
-
-		delay := backoff
-		if delay > subscribeRetryMaxBackoff {
-			delay = subscribeRetryMaxBackoff
-		}
-
+		pubsub = current
+		return nil
+	}, func(state retry.State) {
 		s.logWarn(
 			"redis subscribe failed, retrying",
-			zap.Int("attempt", attempt),
-			zap.Int("max_attempts", subscribeRetryMaxAttempts),
-			zap.Duration("backoff", delay),
-			zap.Error(lastErr),
+			zap.Int("attempt", state.Attempt),
+			zap.Int("max_attempts", state.MaxAttempts),
+			zap.Duration("backoff", state.Backoff),
+			zap.Error(state.Err),
 		)
-
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+	}); err != nil {
+		if ctx.Err() != nil {
 			return nil, ctx.Err()
-		case <-timer.C:
 		}
-
-		backoff *= 2
-		if backoff > subscribeRetryMaxBackoff {
-			backoff = subscribeRetryMaxBackoff
-		}
+		return nil, err
 	}
 
-	if lastErr == nil {
+	if pubsub == nil {
 		return nil, fmt.Errorf("redis subscribe failed")
 	}
-	return nil, lastErr
+
+	return pubsub, nil
 }
 
 // Stop terminates the streaming goroutine and waits for it to finish.

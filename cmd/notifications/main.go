@@ -19,6 +19,7 @@ import (
 	"github.com/agynio/notifications/internal/config"
 	"github.com/agynio/notifications/internal/logging"
 	redisstream "github.com/agynio/notifications/internal/redis"
+	"github.com/agynio/notifications/internal/retry"
 	"github.com/agynio/notifications/internal/server"
 	"github.com/agynio/notifications/internal/stream"
 )
@@ -143,57 +144,32 @@ func run() error {
 }
 
 func ensureRedis(ctx context.Context, logger *zap.Logger, client *redis.Client) error {
-	backoff := redisRetryInitialBackoff
-	var lastErr error
-	for attempt := 1; attempt <= redisRetryMaxAttempts; attempt++ {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
+	config := retry.Config{
+		MaxAttempts:    redisRetryMaxAttempts,
+		InitialBackoff: redisRetryInitialBackoff,
+		MaxBackoff:     redisRetryMaxBackoff,
+	}
+	if err := retry.WithBackoff(ctx, config, func(ctx context.Context) error {
 		pingCtx, cancel := context.WithTimeout(ctx, redisPingTimeout)
-		err := client.Ping(pingCtx).Err()
-		cancel()
-		if err == nil {
-			return nil
+		defer cancel()
+		return client.Ping(pingCtx).Err()
+	}, func(state retry.State) {
+		if logger == nil {
+			return
 		}
-		lastErr = err
+		logger.Warn(
+			"redis ping failed, retrying",
+			zap.Int("attempt", state.Attempt),
+			zap.Int("max_attempts", state.MaxAttempts),
+			zap.Duration("backoff", state.Backoff),
+			zap.Error(state.Err),
+		)
+	}); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if attempt == redisRetryMaxAttempts {
-			break
-		}
-
-		delay := backoff
-		if delay > redisRetryMaxBackoff {
-			delay = redisRetryMaxBackoff
-		}
-
-		if logger != nil {
-			logger.Warn(
-				"redis ping failed, retrying",
-				zap.Int("attempt", attempt),
-				zap.Int("max_attempts", redisRetryMaxAttempts),
-				zap.Duration("backoff", delay),
-				zap.Error(err),
-			)
-		}
-
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-
-		backoff *= 2
-		if backoff > redisRetryMaxBackoff {
-			backoff = redisRetryMaxBackoff
-		}
+		return fmt.Errorf("redis ping: %w", err)
 	}
 
-	if lastErr == nil {
-		return fmt.Errorf("redis ping: unknown error")
-	}
-	return fmt.Errorf("redis ping: %w", lastErr)
+	return nil
 }
