@@ -66,7 +66,8 @@ func TestSubscriber_StartAndReceive(t *testing.T) {
 func TestSubscriber_Start_ErrorOnSubscribe(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
 
 	mock := &mockSubscriber{
 		sub: &mockPubSub{

@@ -19,8 +19,16 @@ import (
 	"github.com/agynio/notifications/internal/config"
 	"github.com/agynio/notifications/internal/logging"
 	redisstream "github.com/agynio/notifications/internal/redis"
+	"github.com/agynio/notifications/internal/retry"
 	"github.com/agynio/notifications/internal/server"
 	"github.com/agynio/notifications/internal/stream"
+)
+
+const (
+	redisRetryMaxAttempts    = 15
+	redisRetryInitialBackoff = 500 * time.Millisecond
+	redisRetryMaxBackoff     = 5 * time.Second
+	redisPingTimeout         = 3 * time.Second
 )
 
 func main() {
@@ -59,7 +67,7 @@ func run() error {
 	})
 	defer func() { _ = subClient.Close() }()
 
-	if err := ensureRedis(ctx, pubClient); err != nil {
+	if err := ensureRedis(ctx, logger, pubClient); err != nil {
 		return err
 	}
 
@@ -135,11 +143,33 @@ func run() error {
 	return nil
 }
 
-func ensureRedis(ctx context.Context, client *redis.Client) error {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	if err := client.Ping(ctx).Err(); err != nil {
+func ensureRedis(ctx context.Context, logger *zap.Logger, client *redis.Client) error {
+	config := retry.Config{
+		MaxAttempts:    redisRetryMaxAttempts,
+		InitialBackoff: redisRetryInitialBackoff,
+		MaxBackoff:     redisRetryMaxBackoff,
+	}
+	if err := retry.WithBackoff(ctx, config, func(ctx context.Context) error {
+		pingCtx, cancel := context.WithTimeout(ctx, redisPingTimeout)
+		defer cancel()
+		return client.Ping(pingCtx).Err()
+	}, func(state retry.State) {
+		if logger == nil {
+			return
+		}
+		logger.Warn(
+			"redis ping failed, retrying",
+			zap.Int("attempt", state.Attempt),
+			zap.Int("max_attempts", state.MaxAttempts),
+			zap.Duration("backoff", state.Backoff),
+			zap.Error(state.Err),
+		)
+	}); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return fmt.Errorf("redis ping: %w", err)
 	}
+
 	return nil
 }
