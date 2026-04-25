@@ -61,6 +61,16 @@ func (s *Server) authorizeSubscribe(ctx context.Context, identityID uuid.UUID, r
 			if !allowed {
 				return status.Error(codes.PermissionDenied, "permission denied")
 			}
+		case roomKindOrganization:
+			allowed, err := s.memberAllowed(ctx, identityID, room.id, memberCache)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return status.Error(codes.PermissionDenied, "permission denied")
+			}
+		case roomKindOther:
+			return status.Error(codes.PermissionDenied, "permission denied")
 		}
 	}
 	return nil

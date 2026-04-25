@@ -150,6 +150,49 @@ func TestSubscribe(t *testing.T) {
 	}
 }
 
+func TestSubscribeCanonicalizesRooms(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(4, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	workloadID := uuid.New()
+	requestRoom := fmt.Sprintf("workload: %s", workloadID)
+	canonicalRoom := fmt.Sprintf("workload:%s", workloadID)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{requestRoom}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+
+	envelope := &notificationsv1.NotificationEnvelope{
+		Id:     uuid.NewString(),
+		Ts:     timestamppb.Now(),
+		Event:  "evt",
+		Source: "src",
+		Rooms:  []string{canonicalRoom},
+		Payload: &structpb.Struct{Fields: map[string]*structpb.Value{
+			"value": structpb.NewNumberValue(1),
+		}},
+	}
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		hub.Broadcast(envelope)
+	}()
+
+	msg, err := streamClient.Recv()
+	if err != nil {
+		t.Fatalf("Recv returned error: %v", err)
+	}
+	if !proto.Equal(envelope, msg.GetEnvelope()) {
+		t.Fatalf("unexpected envelope: %+v", msg.GetEnvelope())
+	}
+}
+
 func TestSubscribeContextCanceled(t *testing.T) {
 	t.Parallel()
 
@@ -308,6 +351,100 @@ func TestSubscribeWorkloadAuthorization(t *testing.T) {
 				t.Fatal("expected authorization check")
 			}
 		})
+	}
+}
+
+func TestSubscribeOrganizationAuthorization(t *testing.T) {
+	t.Parallel()
+
+	organizationID := uuid.New()
+	callerID := uuid.New()
+	room := fmt.Sprintf("organization:%s", organizationID)
+
+	tests := []struct {
+		name       string
+		allowed    bool
+		expectCode codes.Code
+	}{
+		{name: "allowed", allowed: true, expectCode: codes.OK},
+		{name: "denied", allowed: false, expectCode: codes.PermissionDenied},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hub := stream.NewHub(2, zap.NewNop())
+			checkCh := make(chan *authorizationv1.CheckRequest, 1)
+			authClient := fakeAuthorizationClient{
+				check: func(ctx context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
+					checkCh <- req
+					return &authorizationv1.CheckResponse{Allowed: tc.allowed}, nil
+				},
+			}
+			client, cleanup := startTestServer(t, &publisherStub{}, hub,
+				server.WithAuthorizationClient(authClient),
+			)
+			defer cleanup()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ctx = metadata.AppendToOutgoingContext(ctx, identityMetadataKey, callerID.String())
+			streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+			if err != nil {
+				t.Fatalf("Subscribe returned error: %v", err)
+			}
+
+			if tc.expectCode != codes.OK {
+				_, err := streamClient.Recv()
+				if status.Code(err) != tc.expectCode {
+					t.Fatalf("expected code %v, got %v", tc.expectCode, status.Code(err))
+				}
+				select {
+				case <-checkCh:
+				case <-time.After(time.Second):
+					t.Fatal("expected authorization check")
+				}
+				return
+			}
+
+			go func() {
+				time.Sleep(10 * time.Millisecond)
+				hub.Broadcast(&notificationsv1.NotificationEnvelope{Id: uuid.NewString(), Ts: timestamppb.Now(), Rooms: []string{room}})
+			}()
+
+			if _, err := streamClient.Recv(); err != nil {
+				t.Fatalf("Recv returned error: %v", err)
+			}
+
+			select {
+			case gotCheck := <-checkCh:
+				if gotCheck.GetTupleKey().GetObject() != fmt.Sprintf("organization:%s", organizationID) {
+					t.Fatalf("unexpected object: %s", gotCheck.GetTupleKey().GetObject())
+				}
+			case <-time.After(time.Second):
+				t.Fatal("expected authorization check")
+			}
+		})
+	}
+}
+
+func TestSubscribeUnknownRoomAuthorization(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(2, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ctx = metadata.AppendToOutgoingContext(ctx, identityMetadataKey, uuid.NewString())
+
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{"agent:unknown"}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	_, err = streamClient.Recv()
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied error, got %v", status.Code(err))
 	}
 }
 

@@ -38,8 +38,8 @@ func NewHub(bufferSize int, logger *zap.Logger) *Hub {
 	}
 }
 
-// Broadcast delivers the envelope to all subscribers. Slow subscribers are
-// dropped and their channels are closed.
+// Broadcast delivers the envelope to subscribers of the envelope rooms. Slow
+// subscribers are dropped and their channels are closed.
 func (h *Hub) Broadcast(envelope *notificationsv1.NotificationEnvelope) {
 	if envelope == nil {
 		return
