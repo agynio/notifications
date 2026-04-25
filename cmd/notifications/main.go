@@ -14,7 +14,9 @@ import (
 	redis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
+	authorizationv1 "github.com/agynio/notifications/internal/.gen/agynio/api/authorization/v1"
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
 	"github.com/agynio/notifications/internal/config"
 	"github.com/agynio/notifications/internal/logging"
@@ -78,6 +80,7 @@ func run() error {
 	}
 
 	hub := stream.NewHub(cfg.StreamBufferSize, logger)
+	workloadOrgIndex := server.NewWorkloadOrgIndex()
 
 	forwardCtx, forwardCancel := context.WithCancel(ctx)
 	var forwardWG sync.WaitGroup
@@ -92,16 +95,29 @@ func run() error {
 				if !ok {
 					return
 				}
+				workloadOrgIndex.RecordEnvelope(envelope)
 				hub.Broadcast(envelope)
 			}
 		}
 	}()
+
+	authorizationConn, err := grpc.DialContext(ctx, cfg.AuthorizationAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		forwardCancel()
+		forwardWG.Wait()
+		subscriber.Stop()
+		return fmt.Errorf("dial authorization service: %w", err)
+	}
+	defer authorizationConn.Close()
 
 	grpcServer := grpc.NewServer()
 	notificationsv1.RegisterNotificationsServiceServer(
 		grpcServer,
 		server.New(publisher, hub, logger,
 			server.WithClock(func() time.Time { return time.Now().UTC() }),
+			server.WithAuthorizationClient(authorizationv1.NewAuthorizationServiceClient(authorizationConn)),
+			server.WithWorkloadOrgResolver(workloadOrgIndex),
+			server.WithWorkloadOrgRecorder(workloadOrgIndex),
 		),
 	)
 

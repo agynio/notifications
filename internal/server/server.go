@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	authorizationv1 "github.com/agynio/notifications/internal/.gen/agynio/api/authorization/v1"
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
 )
 
@@ -22,7 +23,7 @@ type Publisher interface {
 // SubscriptionHub captures the subset of stream.Hub behaviour needed by the
 // server to register streaming clients.
 type SubscriptionHub interface {
-	Subscribe() (<-chan *notificationsv1.NotificationEnvelope, func())
+	Subscribe(rooms []string) (<-chan *notificationsv1.NotificationEnvelope, func())
 }
 
 // Clock produces the current time. Allows determinism in tests.
@@ -52,15 +53,39 @@ func WithIDGenerator(generator IDGenerator) Option {
 	}
 }
 
+// WithAuthorizationClient injects the Authorization service client.
+func WithAuthorizationClient(client authorizationv1.AuthorizationServiceClient) Option {
+	return func(s *Server) {
+		s.authorizationClient = client
+	}
+}
+
+// WithWorkloadOrgResolver injects a resolver for workload organization lookups.
+func WithWorkloadOrgResolver(resolver WorkloadOrgResolver) Option {
+	return func(s *Server) {
+		s.workloadOrgResolver = resolver
+	}
+}
+
+// WithWorkloadOrgRecorder injects a recorder for workload organization mappings.
+func WithWorkloadOrgRecorder(recorder WorkloadOrgRecorder) Option {
+	return func(s *Server) {
+		s.workloadOrgRecorder = recorder
+	}
+}
+
 // Server implements the NotificationsService gRPC handlers.
 type Server struct {
 	notificationsv1.UnimplementedNotificationsServiceServer
 
-	logger      *zap.Logger
-	publisher   Publisher
-	hub         SubscriptionHub
-	clock       Clock
-	idGenerator IDGenerator
+	logger              *zap.Logger
+	publisher           Publisher
+	hub                 SubscriptionHub
+	clock               Clock
+	idGenerator         IDGenerator
+	authorizationClient authorizationv1.AuthorizationServiceClient
+	workloadOrgResolver WorkloadOrgResolver
+	workloadOrgRecorder WorkloadOrgRecorder
 }
 
 // New constructs a Server with the provided dependencies.
@@ -101,6 +126,9 @@ func (s *Server) Publish(ctx context.Context, req *notificationsv1.PublishReques
 		s.logger.Error("publish failed", zap.Error(err))
 		return nil, status.Errorf(codes.Internal, "publish failed")
 	}
+	if s.workloadOrgRecorder != nil {
+		s.workloadOrgRecorder.RecordEnvelope(envelope)
+	}
 
 	return &notificationsv1.PublishResponse{Id: envelope.Id, Ts: envelope.Ts}, nil
 }
@@ -108,10 +136,25 @@ func (s *Server) Publish(ctx context.Context, req *notificationsv1.PublishReques
 // Subscribe streams live notifications to the caller until the context is
 // cancelled or the subscription is otherwise terminated.
 func (s *Server) Subscribe(req *notificationsv1.SubscribeRequest, stream notificationsv1.NotificationsService_SubscribeServer) error {
-	ch, cancel := s.hub.Subscribe()
-	defer cancel()
+	rooms, err := parseSubscribeRooms(req)
+	if err != nil {
+		return err
+	}
 
 	ctx := stream.Context()
+	callerID, hasIdentity, err := identityFromMetadata(ctx)
+	if err != nil {
+		return status.Errorf(codes.Unauthenticated, "unauthenticated: %v", err)
+	}
+	if hasIdentity {
+		if err := s.authorizeSubscribe(ctx, callerID, rooms); err != nil {
+			return err
+		}
+	}
+
+	ch, cancel := s.hub.Subscribe(roomNames(rooms))
+	defer cancel()
+
 	for {
 		select {
 		case <-ctx.Done():
