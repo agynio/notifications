@@ -17,13 +17,13 @@ func TestHubBroadcastDeliversToSubscribers(t *testing.T) {
 	logger := zaptest.NewLogger(t)
 	hub := NewHub(2, logger)
 
-	ch1, cancel1 := hub.Subscribe()
+	ch1, cancel1 := hub.Subscribe([]string{"room-a"})
 	defer cancel1()
 
-	ch2, cancel2 := hub.Subscribe()
+	ch2, cancel2 := hub.Subscribe([]string{"room-a"})
 	defer cancel2()
 
-	envelope := &notificationsv1.NotificationEnvelope{Id: "id", Ts: timestamppb.Now()}
+	envelope := &notificationsv1.NotificationEnvelope{Id: "id", Ts: timestamppb.Now(), Rooms: []string{"room-a"}}
 
 	hub.Broadcast(envelope)
 
@@ -46,18 +46,50 @@ func TestHubBroadcastDeliversToSubscribers(t *testing.T) {
 	}
 }
 
+func TestHubBroadcastFiltersRooms(t *testing.T) {
+	t.Parallel()
+
+	logger := zap.NewNop()
+	hub := NewHub(1, logger)
+
+	chA, cancelA := hub.Subscribe([]string{"room-a"})
+	defer cancelA()
+
+	chB, cancelB := hub.Subscribe([]string{"room-b"})
+	defer cancelB()
+
+	envelope := &notificationsv1.NotificationEnvelope{Id: "id", Ts: timestamppb.Now(), Rooms: []string{"room-a"}}
+
+	hub.Broadcast(envelope)
+
+	select {
+	case msg := <-chA:
+		if msg.GetId() != envelope.GetId() {
+			t.Fatalf("unexpected id: got %s want %s", msg.GetId(), envelope.GetId())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for room-a subscriber")
+	}
+
+	select {
+	case <-chB:
+		t.Fatal("room-b subscriber should not receive room-a envelope")
+	case <-time.After(50 * time.Millisecond):
+	}
+}
+
 func TestHubDropsSlowSubscriber(t *testing.T) {
 	t.Parallel()
 
 	logger := zap.NewNop()
 	hub := NewHub(1, logger)
 
-	chSlow, _ := hub.Subscribe()
-	chFast, cancelFast := hub.Subscribe()
+	chSlow, _ := hub.Subscribe([]string{"room-a"})
+	chFast, cancelFast := hub.Subscribe([]string{"room-a"})
 	defer cancelFast()
 
-	envelope1 := &notificationsv1.NotificationEnvelope{Id: "event-1", Ts: timestamppb.Now()}
-	envelope2 := &notificationsv1.NotificationEnvelope{Id: "event-2", Ts: timestamppb.Now()}
+	envelope1 := &notificationsv1.NotificationEnvelope{Id: "event-1", Ts: timestamppb.Now(), Rooms: []string{"room-a"}}
+	envelope2 := &notificationsv1.NotificationEnvelope{Id: "event-2", Ts: timestamppb.Now(), Rooms: []string{"room-a"}}
 
 	hub.Broadcast(envelope1)
 	hub.Broadcast(envelope2)
