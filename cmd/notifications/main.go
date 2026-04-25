@@ -81,6 +81,7 @@ func run() error {
 
 	hub := stream.NewHub(cfg.StreamBufferSize, logger)
 	workloadOrgIndex := server.NewWorkloadOrgIndex()
+	traceOrgIndex := server.NewTraceOrgIndex()
 
 	forwardCtx, forwardCancel := context.WithCancel(ctx)
 	var forwardWG sync.WaitGroup
@@ -96,6 +97,7 @@ func run() error {
 					return
 				}
 				workloadOrgIndex.RecordEnvelope(envelope)
+				traceOrgIndex.RecordEnvelope(envelope)
 				hub.Broadcast(envelope)
 			}
 		}
@@ -118,6 +120,8 @@ func run() error {
 			server.WithAuthorizationClient(authorizationv1.NewAuthorizationServiceClient(authorizationConn)),
 			server.WithWorkloadOrgResolver(workloadOrgIndex),
 			server.WithWorkloadOrgRecorder(workloadOrgIndex),
+			server.WithTraceOrgResolver(traceOrgIndex),
+			server.WithTraceOrgRecorder(traceOrgIndex),
 		),
 	)
 
