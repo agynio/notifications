@@ -74,6 +74,20 @@ func WithWorkloadOrgRecorder(recorder WorkloadOrgRecorder) Option {
 	}
 }
 
+// WithTraceOrgResolver injects a resolver for trace organization lookups.
+func WithTraceOrgResolver(resolver TraceOrgResolver) Option {
+	return func(s *Server) {
+		s.traceOrgResolver = resolver
+	}
+}
+
+// WithTraceOrgRecorder injects a recorder for trace organization mappings.
+func WithTraceOrgRecorder(recorder TraceOrgRecorder) Option {
+	return func(s *Server) {
+		s.traceOrgRecorder = recorder
+	}
+}
+
 // Server implements the NotificationsService gRPC handlers.
 type Server struct {
 	notificationsv1.UnimplementedNotificationsServiceServer
@@ -86,6 +100,8 @@ type Server struct {
 	authorizationClient authorizationv1.AuthorizationServiceClient
 	workloadOrgResolver WorkloadOrgResolver
 	workloadOrgRecorder WorkloadOrgRecorder
+	traceOrgResolver    TraceOrgResolver
+	traceOrgRecorder    TraceOrgRecorder
 }
 
 // New constructs a Server with the provided dependencies.
@@ -128,6 +144,9 @@ func (s *Server) Publish(ctx context.Context, req *notificationsv1.PublishReques
 	}
 	if s.workloadOrgRecorder != nil {
 		s.workloadOrgRecorder.RecordEnvelope(envelope)
+	}
+	if s.traceOrgRecorder != nil {
+		s.traceOrgRecorder.RecordEnvelope(envelope)
 	}
 
 	return &notificationsv1.PublishResponse{Id: envelope.Id, Ts: envelope.Ts}, nil

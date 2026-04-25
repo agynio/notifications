@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,6 +194,80 @@ func TestSubscribeCanonicalizesRooms(t *testing.T) {
 	}
 }
 
+func TestSubscribeTraceCanonicalizesRooms(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(4, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	traceID := "0123456789abcdef0123456789abcdef"
+	requestRoom := fmt.Sprintf("trace:%s", strings.ToUpper(traceID))
+	canonicalRoom := fmt.Sprintf("trace:%s", traceID)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{requestRoom}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+
+	envelope := &notificationsv1.NotificationEnvelope{
+		Id:     uuid.NewString(),
+		Ts:     timestamppb.Now(),
+		Event:  "evt",
+		Source: "src",
+		Rooms:  []string{canonicalRoom},
+		Payload: &structpb.Struct{Fields: map[string]*structpb.Value{
+			"value": structpb.NewNumberValue(1),
+		}},
+	}
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		hub.Broadcast(envelope)
+	}()
+
+	msg, err := streamClient.Recv()
+	if err != nil {
+		t.Fatalf("Recv returned error: %v", err)
+	}
+	if !proto.Equal(envelope, msg.GetEnvelope()) {
+		t.Fatalf("unexpected envelope: %+v", msg.GetEnvelope())
+	}
+}
+
+func TestSubscribeTraceRoomsInvalid(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(2, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	tests := []string{
+		"trace:",
+		"trace:1234",
+		"trace:0123456789abcdef0123456789abcde",
+		"trace:0123456789abcdef0123456789abcdef00",
+		"trace:0123456789abcdef0123456789abcdeg",
+	}
+
+	for _, room := range tests {
+		room := room
+		t.Run(room, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+			if err == nil {
+				_, err = streamClient.Recv()
+			}
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("expected InvalidArgument, got %v", status.Code(err))
+			}
+		})
+	}
+}
+
 func TestSubscribeContextCanceled(t *testing.T) {
 	t.Parallel()
 
@@ -351,6 +426,132 @@ func TestSubscribeWorkloadAuthorization(t *testing.T) {
 				t.Fatal("expected authorization check")
 			}
 		})
+	}
+}
+
+func TestSubscribeTraceAuthorization(t *testing.T) {
+	t.Parallel()
+
+	traceID := "0123456789abcdef0123456789abcdef"
+	organizationID := uuid.New()
+	callerID := uuid.New()
+	room := fmt.Sprintf("trace:%s", traceID)
+	store := server.NewTraceOrgIndex()
+	store.RecordEnvelope(&notificationsv1.NotificationEnvelope{
+		Rooms: []string{room},
+		Payload: &structpb.Struct{Fields: map[string]*structpb.Value{
+			"organization_id": structpb.NewStringValue(organizationID.String()),
+		}},
+	})
+
+	tests := []struct {
+		name       string
+		allowed    bool
+		expectCode codes.Code
+	}{
+		{name: "allowed", allowed: true, expectCode: codes.OK},
+		{name: "denied", allowed: false, expectCode: codes.PermissionDenied},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hub := stream.NewHub(2, zap.NewNop())
+			checkCh := make(chan *authorizationv1.CheckRequest, 1)
+			authClient := fakeAuthorizationClient{
+				check: func(ctx context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
+					checkCh <- req
+					return &authorizationv1.CheckResponse{Allowed: tc.allowed}, nil
+				},
+			}
+			client, cleanup := startTestServer(t, &publisherStub{}, hub,
+				server.WithAuthorizationClient(authClient),
+				server.WithTraceOrgResolver(store),
+				server.WithTraceOrgRecorder(store),
+			)
+			defer cleanup()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ctx = metadata.AppendToOutgoingContext(ctx, identityMetadataKey, callerID.String())
+			streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+			if err != nil {
+				t.Fatalf("Subscribe returned error: %v", err)
+			}
+
+			if tc.expectCode != codes.OK {
+				_, err := streamClient.Recv()
+				if status.Code(err) != tc.expectCode {
+					t.Fatalf("expected code %v, got %v", tc.expectCode, status.Code(err))
+				}
+				select {
+				case <-checkCh:
+				case <-time.After(time.Second):
+					t.Fatal("expected authorization check")
+				}
+				return
+			}
+
+			go func() {
+				time.Sleep(10 * time.Millisecond)
+				hub.Broadcast(&notificationsv1.NotificationEnvelope{Id: uuid.NewString(), Ts: timestamppb.Now(), Rooms: []string{room}})
+			}()
+
+			if _, err := streamClient.Recv(); err != nil {
+				t.Fatalf("Recv returned error: %v", err)
+			}
+
+			select {
+			case gotCheck := <-checkCh:
+				if gotCheck.GetTupleKey().GetObject() != fmt.Sprintf("organization:%s", organizationID) {
+					t.Fatalf("unexpected object: %s", gotCheck.GetTupleKey().GetObject())
+				}
+			case <-time.After(time.Second):
+				t.Fatal("expected authorization check")
+			}
+		})
+	}
+}
+
+func TestSubscribeTraceAuthorizationMissingMapping(t *testing.T) {
+	t.Parallel()
+
+	traceID := "0123456789abcdef0123456789abcdef"
+	callerID := uuid.New()
+	room := fmt.Sprintf("trace:%s", traceID)
+	store := server.NewTraceOrgIndex()
+
+	hub := stream.NewHub(2, zap.NewNop())
+	checkCh := make(chan *authorizationv1.CheckRequest, 1)
+	authClient := fakeAuthorizationClient{
+		check: func(ctx context.Context, req *authorizationv1.CheckRequest) (*authorizationv1.CheckResponse, error) {
+			checkCh <- req
+			return &authorizationv1.CheckResponse{Allowed: true}, nil
+		},
+	}
+	client, cleanup := startTestServer(t, &publisherStub{}, hub,
+		server.WithAuthorizationClient(authClient),
+		server.WithTraceOrgResolver(store),
+		server.WithTraceOrgRecorder(store),
+	)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ctx = metadata.AppendToOutgoingContext(ctx, identityMetadataKey, callerID.String())
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+
+	_, err = streamClient.Recv()
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", status.Code(err))
+	}
+
+	select {
+	case <-checkCh:
+		t.Fatal("unexpected authorization check")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 

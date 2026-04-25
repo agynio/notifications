@@ -69,6 +69,21 @@ func (s *Server) authorizeSubscribe(ctx context.Context, identityID uuid.UUID, r
 			if !allowed {
 				return status.Error(codes.PermissionDenied, "permission denied")
 			}
+		case roomKindTrace:
+			if s.traceOrgResolver == nil {
+				return status.Error(codes.Internal, "trace org resolver unavailable")
+			}
+			organizationID, ok := s.traceOrgResolver.OrgIDForTrace(room.traceID)
+			if !ok {
+				return status.Error(codes.PermissionDenied, "permission denied")
+			}
+			allowed, err := s.memberAllowed(ctx, identityID, organizationID, memberCache)
+			if err != nil {
+				return err
+			}
+			if !allowed {
+				return status.Error(codes.PermissionDenied, "permission denied")
+			}
 		case roomKindOther:
 			return status.Error(codes.PermissionDenied, "permission denied")
 		}
