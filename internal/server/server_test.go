@@ -183,14 +183,26 @@ func TestSubscribeCanonicalizesRooms(t *testing.T) {
 	t.Parallel()
 
 	hub := stream.NewHub(4, zap.NewNop())
-	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	auth := &authStub{allowed: true}
+	orgID := uuid.New()
+	workloadID := uuid.New()
+	store := server.NewWorkloadOrgIndex()
+	store.RecordEnvelope(&notificationsv1.NotificationEnvelope{Rooms: []string{
+		fmt.Sprintf("workload:%s", workloadID),
+		fmt.Sprintf("organization:%s", orgID),
+	}})
+	client, cleanup := startTestServer(t, &publisherStub{}, hub,
+		server.WithAuthorizationClient(auth),
+		server.WithWorkloadOrgResolver(store),
+		server.WithWorkloadOrgRecorder(store),
+	)
 	defer cleanup()
 
-	workloadID := uuid.New()
 	requestRoom := fmt.Sprintf("workload: %s", workloadID)
 	canonicalRoom := fmt.Sprintf("workload:%s", workloadID)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs(identityMetadataKey, uuid.NewString()))
 
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{requestRoom}})
 	if err != nil {
@@ -226,14 +238,28 @@ func TestSubscribeTraceCanonicalizesRooms(t *testing.T) {
 	t.Parallel()
 
 	hub := stream.NewHub(4, zap.NewNop())
-	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	auth := &authStub{allowed: true}
+	organizationID := uuid.New()
+	traceID := "0123456789abcdef0123456789abcdef"
+	store := server.NewTraceOrgIndex()
+	store.RecordEnvelope(&notificationsv1.NotificationEnvelope{
+		Rooms: []string{fmt.Sprintf("trace:%s", traceID)},
+		Payload: &structpb.Struct{Fields: map[string]*structpb.Value{
+			"organization_id": structpb.NewStringValue(organizationID.String()),
+		}},
+	})
+	client, cleanup := startTestServer(t, &publisherStub{}, hub,
+		server.WithAuthorizationClient(auth),
+		server.WithTraceOrgResolver(store),
+		server.WithTraceOrgRecorder(store),
+	)
 	defer cleanup()
 
-	traceID := "0123456789abcdef0123456789abcdef"
 	requestRoom := fmt.Sprintf("trace:%s", strings.ToUpper(traceID))
 	canonicalRoom := fmt.Sprintf("trace:%s", traceID)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+	ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs(identityMetadataKey, uuid.NewString()))
 
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{requestRoom}})
 	if err != nil {
@@ -271,6 +297,7 @@ func TestSubscribeTraceRoomsInvalid(t *testing.T) {
 	hub := stream.NewHub(2, zap.NewNop())
 	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
+	identityID := uuid.New()
 
 	tests := []string{
 		"trace:",
@@ -285,6 +312,7 @@ func TestSubscribeTraceRoomsInvalid(t *testing.T) {
 		t.Run(room, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
+			ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs(identityMetadataKey, identityID.String()))
 			streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
 			if err == nil {
 				_, err = streamClient.Recv()
@@ -804,24 +832,21 @@ func TestSubscribeUnknownRoomAuthorization(t *testing.T) {
 	}
 }
 
-func TestSubscribeInternalBypassesAuthorization(t *testing.T) {
+func TestSubscribeRequiresIdentity(t *testing.T) {
 	t.Parallel()
 
 	hub := stream.NewHub(2, zap.NewNop())
 	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{fmt.Sprintf("workload:%s", uuid.NewString())}})
-	if err != nil {
-		cancel()
-		t.Fatalf("Subscribe returned error: %v", err)
+	if err == nil {
+		_, err = streamClient.Recv()
 	}
-
-	cancel()
-	_, err = streamClient.Recv()
-	if status.Code(err) != codes.Canceled {
-		t.Fatalf("expected canceled code, got %v", status.Code(err))
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("expected unauthenticated code, got %v", status.Code(err))
 	}
 }
 

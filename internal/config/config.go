@@ -43,10 +43,7 @@ func Load() (Config, error) {
 	cfg.GRPCAddr = readEnv("GRPC_ADDR", defaultGRPCAddr)
 	cfg.RedisAddr = readEnv("REDIS_ADDR", defaultRedisAddr)
 	cfg.RedisPassword = readEnv("REDIS_PASSWORD", "")
-	cfg.AuthorizationAddr = readEnv("AUTHORIZATION_ADDR", "")
-	if cfg.AuthorizationAddr == "" {
-		cfg.AuthorizationAddr = readEnv("AUTHORIZATION_ADDRESS", defaultAuthorizationAddr)
-	}
+	cfg.AuthorizationAddr = readEnv("AUTHORIZATION_ADDR", defaultAuthorizationAddr)
 
 	redisDBStr := readEnv("REDIS_DB", "")
 	if redisDBStr == "" {

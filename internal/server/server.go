@@ -150,20 +150,22 @@ func (s *Server) Publish(ctx context.Context, req *notificationsv1.PublishReques
 // Subscribe streams live notifications to the caller until the context is
 // cancelled or the subscription is otherwise terminated.
 func (s *Server) Subscribe(req *notificationsv1.SubscribeRequest, stream notificationsv1.NotificationsService_SubscribeServer) error {
-	rooms, err := parseSubscribeRooms(req)
-	if err != nil {
-		return err
-	}
-
 	ctx := stream.Context()
 	callerID, hasIdentity, err := identityFromMetadata(ctx)
 	if err != nil {
 		return status.Errorf(codes.Unauthenticated, "unauthenticated: %v", err)
 	}
-	if hasIdentity {
-		if err := s.authorizeSubscribe(ctx, callerID, rooms); err != nil {
-			return err
-		}
+	if !hasIdentity {
+		return status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+
+	rooms, err := parseSubscribeRooms(req)
+	if err != nil {
+		return err
+	}
+
+	if err := s.authorizeSubscribe(ctx, callerID, rooms); err != nil {
+		return err
 	}
 
 	ch, cancel := s.hub.Subscribe(roomNames(rooms))
