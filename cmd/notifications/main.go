@@ -11,19 +11,19 @@ import (
 	"syscall"
 	"time"
 
-	redis "github.com/redis/go-redis/v9"
-	"go.uber.org/zap"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-
 	authorizationv1 "github.com/agynio/notifications/internal/.gen/agynio/api/authorization/v1"
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
+	runnersv1 "github.com/agynio/notifications/internal/.gen/agynio/api/runners/v1"
 	"github.com/agynio/notifications/internal/config"
 	"github.com/agynio/notifications/internal/logging"
 	redisstream "github.com/agynio/notifications/internal/redis"
 	"github.com/agynio/notifications/internal/retry"
 	"github.com/agynio/notifications/internal/server"
 	"github.com/agynio/notifications/internal/stream"
+	redis "github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -73,6 +73,18 @@ func run() error {
 		return err
 	}
 
+	authConn, err := grpc.NewClient(cfg.AuthorizationAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("connect to authorization: %w", err)
+	}
+	defer func() { _ = authConn.Close() }()
+
+	runnersConn, err := grpc.NewClient(cfg.RunnersAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("connect to runners: %w", err)
+	}
+	defer func() { _ = runnersConn.Close() }()
+
 	publisher := redisstream.NewPublisher(pubClient, cfg.RedisChannel)
 	subscriber := redisstream.NewSubscriber(subClient, cfg.RedisChannel, logger)
 	if err := subscriber.Start(ctx); err != nil {
@@ -103,21 +115,13 @@ func run() error {
 		}
 	}()
 
-	authorizationConn, err := grpc.DialContext(ctx, cfg.AuthorizationAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		forwardCancel()
-		forwardWG.Wait()
-		subscriber.Stop()
-		return fmt.Errorf("dial authorization service: %w", err)
-	}
-	defer authorizationConn.Close()
-
 	grpcServer := grpc.NewServer()
 	notificationsv1.RegisterNotificationsServiceServer(
 		grpcServer,
 		server.New(publisher, hub, logger,
 			server.WithClock(func() time.Time { return time.Now().UTC() }),
-			server.WithAuthorizationClient(authorizationv1.NewAuthorizationServiceClient(authorizationConn)),
+			server.WithAuthorizationClient(authorizationv1.NewAuthorizationServiceClient(authConn)),
+			server.WithRunnersClient(runnersv1.NewRunnersServiceClient(runnersConn)),
 			server.WithWorkloadOrgResolver(workloadOrgIndex),
 			server.WithWorkloadOrgRecorder(workloadOrgIndex),
 			server.WithTraceOrgResolver(traceOrgIndex),

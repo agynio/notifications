@@ -11,7 +11,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	authorizationv1 "github.com/agynio/notifications/internal/.gen/agynio/api/authorization/v1"
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
 )
 
@@ -53,13 +52,6 @@ func WithIDGenerator(generator IDGenerator) Option {
 	}
 }
 
-// WithAuthorizationClient injects the Authorization service client.
-func WithAuthorizationClient(client authorizationv1.AuthorizationServiceClient) Option {
-	return func(s *Server) {
-		s.authorizationClient = client
-	}
-}
-
 // WithWorkloadOrgResolver injects a resolver for workload organization lookups.
 func WithWorkloadOrgResolver(resolver WorkloadOrgResolver) Option {
 	return func(s *Server) {
@@ -97,7 +89,8 @@ type Server struct {
 	hub                 SubscriptionHub
 	clock               Clock
 	idGenerator         IDGenerator
-	authorizationClient authorizationv1.AuthorizationServiceClient
+	authorizationClient AuthorizationClient
+	runnersClient       RunnersClient
 	workloadOrgResolver WorkloadOrgResolver
 	workloadOrgRecorder WorkloadOrgRecorder
 	traceOrgResolver    TraceOrgResolver

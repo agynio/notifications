@@ -8,25 +8,27 @@ import (
 )
 
 const (
-	defaultGRPCAddr             = ":50051"
-	defaultRedisAddr            = "127.0.0.1:6379"
-	defaultRedisDB              = 0
-	defaultRedisChannel         = "notifications"
-	defaultStreamBufferSize     = 64
-	defaultLogLevel             = "info"
-	defaultAuthorizationAddress = "authorization:50051"
+	defaultGRPCAddr           = ":50051"
+	defaultRedisAddr          = "127.0.0.1:6379"
+	defaultRedisDB            = 0
+	defaultRedisChannel       = "notifications"
+	defaultStreamBufferSize   = 64
+	defaultLogLevel           = "info"
+	defaultAuthorizationAddr  = "authorization:50051"
+	defaultRunnersServiceAddr = "runners:50051"
 )
 
 // Config captures runtime configuration derived from the environment.
 type Config struct {
-	GRPCAddr             string
-	RedisAddr            string
-	RedisPassword        string
-	RedisDB              int
-	RedisChannel         string
-	StreamBufferSize     int
-	LogLevel             string
-	AuthorizationAddress string
+	GRPCAddr          string
+	RedisAddr         string
+	RedisPassword     string
+	RedisDB           int
+	RedisChannel      string
+	StreamBufferSize  int
+	LogLevel          string
+	AuthorizationAddr string
+	RunnersAddr       string
 }
 
 // Load reads configuration from environment variables, applying defaults when
@@ -37,7 +39,10 @@ func Load() (Config, error) {
 	cfg.GRPCAddr = readEnv("GRPC_ADDR", defaultGRPCAddr)
 	cfg.RedisAddr = readEnv("REDIS_ADDR", defaultRedisAddr)
 	cfg.RedisPassword = readEnv("REDIS_PASSWORD", "")
-	cfg.AuthorizationAddress = readEnv("AUTHORIZATION_ADDRESS", defaultAuthorizationAddress)
+	cfg.AuthorizationAddr = readEnv("AUTHORIZATION_ADDR", "")
+	if cfg.AuthorizationAddr == "" {
+		cfg.AuthorizationAddr = readEnv("AUTHORIZATION_ADDRESS", defaultAuthorizationAddr)
+	}
 
 	redisDBStr := readEnv("REDIS_DB", "")
 	if redisDBStr == "" {
@@ -51,6 +56,7 @@ func Load() (Config, error) {
 	}
 
 	cfg.RedisChannel = readEnv("REDIS_CHANNEL", defaultRedisChannel)
+	cfg.RunnersAddr = readEnv("RUNNERS_ADDR", defaultRunnersServiceAddr)
 
 	bufferStr := readEnv("STREAM_BUFFER_SIZE", "")
 	if bufferStr == "" {
