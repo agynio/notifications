@@ -2,6 +2,9 @@ version: v2
 
 managed:
   enabled: true
+  disable:
+    - file_option: go_package_prefix
+      module: buf.build/opentelemetry/opentelemetry
   override:
     - file_option: go_package_prefix
       value: github.com/agynio/notifications/internal/.gen
