@@ -442,7 +442,7 @@ func TestSubscribeWorkloadAuthorization(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			hub := stream.NewHub(2, zap.NewNop())
 			authClient := &authStub{allowed: tc.allowed}
-			runnersClient := &runnersStub{workload: &runnersv1.Workload{Id: workloadID.String(), OrganizationId: organizationID.String()}}
+			runnersClient := &runnersStub{workload: &runnersv1.Workload{OrganizationId: organizationID.String()}}
 			client, cleanup := startTestServer(t, &publisherStub{}, hub,
 				server.WithAuthorizationClient(authClient),
 				server.WithRunnersClient(runnersClient),
@@ -562,7 +562,7 @@ func TestSubscribeAgentAuthorization(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			hub := stream.NewHub(2, zap.NewNop())
 			authClient := &authStub{allowed: tc.allowed}
-			agentsClient := &agentsStub{agent: &agentsv1.Agent{Id: agentID.String(), OrganizationId: organizationID.String()}}
+			agentsClient := &agentsStub{agent: &agentsv1.Agent{OrganizationId: organizationID.String()}}
 			client, cleanup := startTestServer(t, &publisherStub{}, hub,
 				server.WithAuthorizationClient(authClient),
 				server.WithAgentsClient(agentsClient),
