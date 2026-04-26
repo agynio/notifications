@@ -78,6 +78,14 @@ env:
     value: "0"
   - name: REDIS_CHANNEL
     value: "notifications.v1"
+  - name: AUTHORIZATION_ADDR
+    value: "authorization:50051"
+  - name: RUNNERS_ADDR
+    value: "runners:50051"
+  - name: AGENTS_ADDR
+    value: "agents:50051"
+  - name: TRACING_ADDR
+    value: "tracing:50051"
 envFrom: []
 extraEnvVars: []
 extraEnvVarsCM: ""
