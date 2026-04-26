@@ -15,7 +15,7 @@ import (
 	authorizationv1 "github.com/agynio/notifications/internal/.gen/agynio/api/authorization/v1"
 	runnersv1 "github.com/agynio/notifications/internal/.gen/agynio/api/runners/v1"
 	tracingv1 "github.com/agynio/notifications/internal/.gen/agynio/api/tracing/v1"
-	otlpv1 "github.com/agynio/notifications/internal/.gen/opentelemetry/proto/trace/v1"
+	otlpv1 "go.opentelemetry.io/proto/otlp/trace/v1"
 )
 
 const (
