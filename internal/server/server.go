@@ -91,6 +91,8 @@ type Server struct {
 	idGenerator         IDGenerator
 	authorizationClient AuthorizationClient
 	runnersClient       RunnersClient
+	agentsClient        AgentsClient
+	tracingClient       TracingClient
 	workloadOrgResolver WorkloadOrgResolver
 	workloadOrgRecorder WorkloadOrgRecorder
 	traceOrgResolver    TraceOrgResolver

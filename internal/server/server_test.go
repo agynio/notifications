@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	agentsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/agents/v1"
 	authorizationv1 "github.com/agynio/notifications/internal/.gen/agynio/api/authorization/v1"
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
 	runnersv1 "github.com/agynio/notifications/internal/.gen/agynio/api/runners/v1"
@@ -478,11 +479,134 @@ func TestSubscribeWorkloadAuthorization(t *testing.T) {
 			if runnersClient.requests[0].GetId() != workloadID.String() {
 				t.Fatalf("unexpected workload id: %s", runnersClient.requests[0].GetId())
 			}
+			if runnersClient.identityHeader != callerID.String() {
+				t.Fatalf("expected forwarded identity header %q, got %q", callerID, runnersClient.identityHeader)
+			}
 			if len(authClient.requests) != 1 {
 				t.Fatalf("expected 1 authorization request, got %d", len(authClient.requests))
 			}
 			if authClient.requests[0].GetTupleKey().GetRelation() != "can_view_workloads" {
 				t.Fatalf("expected can_view_workloads relation, got %s", authClient.requests[0].GetTupleKey().GetRelation())
+			}
+			if authClient.requests[0].GetTupleKey().GetObject() != fmt.Sprintf("organization:%s", organizationID) {
+				t.Fatalf("unexpected object: %s", authClient.requests[0].GetTupleKey().GetObject())
+			}
+		})
+	}
+}
+
+func TestSubscribeWorkloadMissingOrganization(t *testing.T) {
+	t.Parallel()
+
+	workloadID := uuid.New()
+	identityID := uuid.New()
+	runnersClient := &runnersStub{workload: &runnersv1.Workload{}}
+
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{}, server.WithRunnersClient(runnersClient))
+	defer cleanup()
+
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(identityMetadataKey, identityID.String()))
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{fmt.Sprintf("workload:%s", workloadID)}})
+	if err == nil {
+		_, err = streamClient.Recv()
+	}
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected internal, got %v", status.Code(err))
+	}
+}
+
+func TestSubscribeWorkloadRunnersError(t *testing.T) {
+	t.Parallel()
+
+	workloadID := uuid.New()
+	identityID := uuid.New()
+	runnersClient := &runnersStub{err: status.Error(codes.NotFound, "missing")}
+
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{}, server.WithRunnersClient(runnersClient))
+	defer cleanup()
+
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs(identityMetadataKey, identityID.String()))
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{fmt.Sprintf("workload:%s", workloadID)}})
+	if err == nil {
+		_, err = streamClient.Recv()
+	}
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected not found, got %v", status.Code(err))
+	}
+}
+
+func TestSubscribeAgentAuthorization(t *testing.T) {
+	t.Parallel()
+
+	agentID := uuid.New()
+	organizationID := uuid.New()
+	callerID := uuid.New()
+	room := fmt.Sprintf("agent:%s", agentID)
+
+	tests := []struct {
+		name       string
+		allowed    bool
+		expectCode codes.Code
+	}{
+		{name: "allowed", allowed: true, expectCode: codes.OK},
+		{name: "denied", allowed: false, expectCode: codes.PermissionDenied},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			hub := stream.NewHub(2, zap.NewNop())
+			authClient := &authStub{allowed: tc.allowed}
+			agentsClient := &agentsStub{agent: &agentsv1.Agent{Id: agentID.String(), OrganizationId: organizationID.String()}}
+			client, cleanup := startTestServer(t, &publisherStub{}, hub,
+				server.WithAuthorizationClient(authClient),
+				server.WithAgentsClient(agentsClient),
+			)
+			defer cleanup()
+
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			ctx = metadata.AppendToOutgoingContext(ctx, identityMetadataKey, callerID.String())
+			streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+			if err != nil {
+				t.Fatalf("Subscribe returned error: %v", err)
+			}
+
+			if tc.expectCode != codes.OK {
+				_, err := streamClient.Recv()
+				if status.Code(err) != tc.expectCode {
+					t.Fatalf("expected code %v, got %v", tc.expectCode, status.Code(err))
+				}
+			} else {
+				go func() {
+					time.Sleep(10 * time.Millisecond)
+					hub.Broadcast(&notificationsv1.NotificationEnvelope{Id: uuid.NewString(), Ts: timestamppb.Now(), Rooms: []string{room}})
+				}()
+
+				if _, err := streamClient.Recv(); err != nil {
+					t.Fatalf("Recv returned error: %v", err)
+				}
+			}
+
+			if len(agentsClient.requests) != 1 {
+				t.Fatalf("expected 1 agent lookup, got %d", len(agentsClient.requests))
+			}
+			if agentsClient.requests[0].GetId() != agentID.String() {
+				t.Fatalf("unexpected agent id: %s", agentsClient.requests[0].GetId())
+			}
+			if agentsClient.identityHeader != callerID.String() {
+				t.Fatalf("expected forwarded identity header %q, got %q", callerID, agentsClient.identityHeader)
+			}
+			if len(authClient.requests) != 1 {
+				t.Fatalf("expected 1 authorization request, got %d", len(authClient.requests))
+			}
+			if authClient.requests[0].GetTupleKey().GetRelation() != "member" {
+				t.Fatalf("expected member relation, got %s", authClient.requests[0].GetTupleKey().GetRelation())
 			}
 			if authClient.requests[0].GetTupleKey().GetObject() != fmt.Sprintf("organization:%s", organizationID) {
 				t.Fatalf("unexpected object: %s", authClient.requests[0].GetTupleKey().GetObject())
@@ -670,7 +794,7 @@ func TestSubscribeUnknownRoomAuthorization(t *testing.T) {
 	defer cancel()
 	ctx = metadata.AppendToOutgoingContext(ctx, identityMetadataKey, uuid.NewString())
 
-	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{"agent:unknown"}})
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{"project:unknown"}})
 	if err != nil {
 		t.Fatalf("Subscribe returned error: %v", err)
 	}
@@ -729,17 +853,45 @@ func (a *authStub) Check(ctx context.Context, req *authorizationv1.CheckRequest,
 }
 
 type runnersStub struct {
-	workload *runnersv1.Workload
-	err      error
-	requests []*runnersv1.GetWorkloadRequest
+	workload       *runnersv1.Workload
+	err            error
+	requests       []*runnersv1.GetWorkloadRequest
+	identityHeader string
 }
 
 func (r *runnersStub) GetWorkload(ctx context.Context, req *runnersv1.GetWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.GetWorkloadResponse, error) {
 	r.requests = append(r.requests, req)
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		values := md.Get(identityMetadataKey)
+		if len(values) > 0 {
+			r.identityHeader = values[0]
+		}
+	}
 	if r.err != nil {
 		return nil, r.err
 	}
 	return &runnersv1.GetWorkloadResponse{Workload: r.workload}, nil
+}
+
+type agentsStub struct {
+	agent          *agentsv1.Agent
+	err            error
+	requests       []*agentsv1.GetAgentRequest
+	identityHeader string
+}
+
+func (a *agentsStub) GetAgent(ctx context.Context, req *agentsv1.GetAgentRequest, _ ...grpc.CallOption) (*agentsv1.GetAgentResponse, error) {
+	a.requests = append(a.requests, req)
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		values := md.Get(identityMetadataKey)
+		if len(values) > 0 {
+			a.identityHeader = values[0]
+		}
+	}
+	if a.err != nil {
+		return nil, a.err
+	}
+	return &agentsv1.GetAgentResponse{Agent: a.agent}, nil
 }
 
 type noopHub struct{}

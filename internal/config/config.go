@@ -16,6 +16,8 @@ const (
 	defaultLogLevel           = "info"
 	defaultAuthorizationAddr  = "authorization:50051"
 	defaultRunnersServiceAddr = "runners:50051"
+	defaultAgentsServiceAddr  = "agents:50051"
+	defaultTracingServiceAddr = "tracing:50051"
 )
 
 // Config captures runtime configuration derived from the environment.
@@ -29,6 +31,8 @@ type Config struct {
 	LogLevel          string
 	AuthorizationAddr string
 	RunnersAddr       string
+	AgentsAddr        string
+	TracingAddr       string
 }
 
 // Load reads configuration from environment variables, applying defaults when
@@ -57,6 +61,8 @@ func Load() (Config, error) {
 
 	cfg.RedisChannel = readEnv("REDIS_CHANNEL", defaultRedisChannel)
 	cfg.RunnersAddr = readEnv("RUNNERS_ADDR", defaultRunnersServiceAddr)
+	cfg.AgentsAddr = readEnv("AGENTS_ADDR", defaultAgentsServiceAddr)
+	cfg.TracingAddr = readEnv("TRACING_ADDR", defaultTracingServiceAddr)
 
 	bufferStr := readEnv("STREAM_BUFFER_SIZE", "")
 	if bufferStr == "" {

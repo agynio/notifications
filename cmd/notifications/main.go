@@ -11,9 +11,11 @@ import (
 	"syscall"
 	"time"
 
+	agentsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/agents/v1"
 	authorizationv1 "github.com/agynio/notifications/internal/.gen/agynio/api/authorization/v1"
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
 	runnersv1 "github.com/agynio/notifications/internal/.gen/agynio/api/runners/v1"
+	tracingv1 "github.com/agynio/notifications/internal/.gen/agynio/api/tracing/v1"
 	"github.com/agynio/notifications/internal/config"
 	"github.com/agynio/notifications/internal/logging"
 	redisstream "github.com/agynio/notifications/internal/redis"
@@ -85,6 +87,18 @@ func run() error {
 	}
 	defer func() { _ = runnersConn.Close() }()
 
+	agentsConn, err := grpc.NewClient(cfg.AgentsAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("connect to agents: %w", err)
+	}
+	defer func() { _ = agentsConn.Close() }()
+
+	tracingConn, err := grpc.NewClient(cfg.TracingAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("connect to tracing: %w", err)
+	}
+	defer func() { _ = tracingConn.Close() }()
+
 	publisher := redisstream.NewPublisher(pubClient, cfg.RedisChannel)
 	subscriber := redisstream.NewSubscriber(subClient, cfg.RedisChannel, logger)
 	if err := subscriber.Start(ctx); err != nil {
@@ -122,6 +136,8 @@ func run() error {
 			server.WithClock(func() time.Time { return time.Now().UTC() }),
 			server.WithAuthorizationClient(authorizationv1.NewAuthorizationServiceClient(authConn)),
 			server.WithRunnersClient(runnersv1.NewRunnersServiceClient(runnersConn)),
+			server.WithAgentsClient(agentsv1.NewAgentsServiceClient(agentsConn)),
+			server.WithTracingClient(tracingv1.NewTracingServiceClient(tracingConn)),
 			server.WithWorkloadOrgResolver(workloadOrgIndex),
 			server.WithWorkloadOrgRecorder(workloadOrgIndex),
 			server.WithTraceOrgResolver(traceOrgIndex),

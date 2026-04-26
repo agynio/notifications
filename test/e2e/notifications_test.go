@@ -13,6 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -22,6 +23,8 @@ import (
 
 const (
 	defaultChannel = "notifications.v1"
+	smokeIdentity  = "550e8400-e29b-41d4-a716-446655440000"
+	smokeRoom      = "thread_participant:550e8400-e29b-41d4-a716-446655440000"
 )
 
 func TestSmoke(t *testing.T) {
@@ -61,8 +64,9 @@ func TestSmoke(t *testing.T) {
 func testSubscribeReceivesRedisPublish(t *testing.T, ctx context.Context, client notificationsv1.NotificationsServiceClient, rdb *redis.Client, channel string) {
 	streamCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	streamCtx = metadata.NewOutgoingContext(streamCtx, metadata.Pairs("x-identity-id", smokeIdentity))
 
-	stream, err := client.Subscribe(streamCtx, &notificationsv1.SubscribeRequest{})
+	stream, err := client.Subscribe(streamCtx, &notificationsv1.SubscribeRequest{Rooms: []string{smokeRoom}})
 	if err != nil {
 		t.Fatalf("subscribe: %v", err)
 	}
@@ -75,7 +79,7 @@ func testSubscribeReceivesRedisPublish(t *testing.T, ctx context.Context, client
 	}
 
 	envelope := &notificationsv1.NotificationEnvelope{
-		Id: "smoke-redis", Ts: timestamppb.Now(), Source: "smoke", Event: "redis.publish", Rooms: []string{"smoke"}, Payload: payloadStruct,
+		Id: "smoke-redis", Ts: timestamppb.Now(), Source: "smoke", Event: "redis.publish", Rooms: []string{smokeRoom}, Payload: payloadStruct,
 	}
 
 	marshaller := protojson.MarshalOptions{EmitUnpopulated: true}
@@ -119,7 +123,7 @@ func testPublishEnqueuesEnvelopeToRedis(t *testing.T, ctx context.Context, clien
 	publishReq := &notificationsv1.PublishRequest{
 		Source:  "smoke",
 		Event:   "grpc.publish",
-		Rooms:   []string{"smoke"},
+		Rooms:   []string{smokeRoom},
 		Payload: payloadStruct,
 	}
 
@@ -156,7 +160,7 @@ func testPublishEnqueuesEnvelopeToRedis(t *testing.T, ctx context.Context, clien
 		t.Fatalf("redis event mismatch: got %q want %q", received.GetEvent(), publishReq.GetEvent())
 	}
 
-	if len(received.GetRooms()) == 0 || received.GetRooms()[0] != "smoke" {
+	if len(received.GetRooms()) == 0 || received.GetRooms()[0] != smokeRoom {
 		t.Fatalf("unexpected rooms: %v", received.GetRooms())
 	}
 }

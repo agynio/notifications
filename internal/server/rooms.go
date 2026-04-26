@@ -18,6 +18,7 @@ const (
 	threadParticipantRoomPrefix = "thread_participant:"
 	workloadRoomPrefix          = "workload:"
 	organizationRoomPrefix      = "organization:"
+	agentRoomPrefix             = "agent:"
 	traceRoomPrefix             = "trace:"
 )
 
@@ -28,6 +29,7 @@ const (
 	roomKindThreadParticipant
 	roomKindWorkload
 	roomKindOrganization
+	roomKindAgent
 	roomKindTrace
 )
 
@@ -102,6 +104,12 @@ func classifyRoom(room string) (roomKind, uuid.UUID, string, string, error) {
 			return roomKindOrganization, uuid.UUID{}, "", "", fmt.Errorf("organization: %w", err)
 		}
 		return roomKindOrganization, id, "", organizationRoomPrefix + id.String(), nil
+	}
+	if id, matched, err := parseRoomUUID(room, agentRoomPrefix); matched {
+		if err != nil {
+			return roomKindAgent, uuid.UUID{}, "", "", fmt.Errorf("agent: %w", err)
+		}
+		return roomKindAgent, id, "", agentRoomPrefix + id.String(), nil
 	}
 	if traceID, matched, err := parseRoomTraceID(room); matched {
 		if err != nil {
