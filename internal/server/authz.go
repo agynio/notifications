@@ -61,7 +61,7 @@ func (s *Server) authorizeSubscribe(ctx context.Context, identityID uuid.UUID, r
 			if err != nil {
 				return err
 			}
-			allowed, err := s.viewWorkloadsAllowed(ctx, identityID, organizationID, viewWorkloadsCache)
+			allowed, err := s.memberAllowed(ctx, identityID, organizationID, memberCache)
 			if err != nil {
 				return err
 			}

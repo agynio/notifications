@@ -513,8 +513,8 @@ func TestSubscribeWorkloadAuthorization(t *testing.T) {
 			if len(authClient.requests) != 1 {
 				t.Fatalf("expected 1 authorization request, got %d", len(authClient.requests))
 			}
-			if authClient.requests[0].GetTupleKey().GetRelation() != "can_view_workloads" {
-				t.Fatalf("expected can_view_workloads relation, got %s", authClient.requests[0].GetTupleKey().GetRelation())
+			if authClient.requests[0].GetTupleKey().GetRelation() != "member" {
+				t.Fatalf("expected member relation, got %s", authClient.requests[0].GetTupleKey().GetRelation())
 			}
 			if authClient.requests[0].GetTupleKey().GetObject() != fmt.Sprintf("organization:%s", organizationID) {
 				t.Fatalf("unexpected object: %s", authClient.requests[0].GetTupleKey().GetObject())
@@ -832,7 +832,7 @@ func TestSubscribeUnknownRoomAuthorization(t *testing.T) {
 	}
 }
 
-func TestSubscribeRequiresIdentity(t *testing.T) {
+func TestSubscribeAllowsInternalWithoutIdentity(t *testing.T) {
 	t.Parallel()
 
 	hub := stream.NewHub(2, zap.NewNop())
@@ -841,12 +841,20 @@ func TestSubscribeRequiresIdentity(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{fmt.Sprintf("workload:%s", uuid.NewString())}})
-	if err == nil {
-		_, err = streamClient.Recv()
+
+	room := fmt.Sprintf("workload:%s", uuid.NewString())
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
 	}
-	if status.Code(err) != codes.Unauthenticated {
-		t.Fatalf("expected unauthenticated code, got %v", status.Code(err))
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		hub.Broadcast(&notificationsv1.NotificationEnvelope{Id: uuid.NewString(), Ts: timestamppb.Now(), Rooms: []string{room}})
+	}()
+
+	if _, err := streamClient.Recv(); err != nil {
+		t.Fatalf("Recv returned error: %v", err)
 	}
 }
 
