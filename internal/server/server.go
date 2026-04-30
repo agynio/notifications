@@ -52,51 +52,15 @@ func WithIDGenerator(generator IDGenerator) Option {
 	}
 }
 
-// WithWorkloadOrgResolver injects a resolver for workload organization lookups.
-func WithWorkloadOrgResolver(resolver WorkloadOrgResolver) Option {
-	return func(s *Server) {
-		s.workloadOrgResolver = resolver
-	}
-}
-
-// WithWorkloadOrgRecorder injects a recorder for workload organization mappings.
-func WithWorkloadOrgRecorder(recorder WorkloadOrgRecorder) Option {
-	return func(s *Server) {
-		s.workloadOrgRecorder = recorder
-	}
-}
-
-// WithTraceOrgResolver injects a resolver for trace organization lookups.
-func WithTraceOrgResolver(resolver TraceOrgResolver) Option {
-	return func(s *Server) {
-		s.traceOrgResolver = resolver
-	}
-}
-
-// WithTraceOrgRecorder injects a recorder for trace organization mappings.
-func WithTraceOrgRecorder(recorder TraceOrgRecorder) Option {
-	return func(s *Server) {
-		s.traceOrgRecorder = recorder
-	}
-}
-
 // Server implements the NotificationsService gRPC handlers.
 type Server struct {
 	notificationsv1.UnimplementedNotificationsServiceServer
 
-	logger              *zap.Logger
-	publisher           Publisher
-	hub                 SubscriptionHub
-	clock               Clock
-	idGenerator         IDGenerator
-	authorizationClient AuthorizationClient
-	runnersClient       RunnersClient
-	agentsClient        AgentsClient
-	tracingClient       TracingClient
-	workloadOrgResolver WorkloadOrgResolver
-	workloadOrgRecorder WorkloadOrgRecorder
-	traceOrgResolver    TraceOrgResolver
-	traceOrgRecorder    TraceOrgRecorder
+	logger      *zap.Logger
+	publisher   Publisher
+	hub         SubscriptionHub
+	clock       Clock
+	idGenerator IDGenerator
 }
 
 // New constructs a Server with the provided dependencies.
@@ -136,12 +100,6 @@ func (s *Server) Publish(ctx context.Context, req *notificationsv1.PublishReques
 	if err := s.publisher.Publish(ctx, envelope); err != nil {
 		s.logger.Error("publish failed", zap.Error(err))
 		return nil, status.Errorf(codes.Internal, "publish failed")
-	}
-	if s.workloadOrgRecorder != nil {
-		s.workloadOrgRecorder.RecordEnvelope(envelope)
-	}
-	if s.traceOrgRecorder != nil {
-		s.traceOrgRecorder.RecordEnvelope(envelope)
 	}
 
 	return &notificationsv1.PublishResponse{Id: envelope.Id, Ts: envelope.Ts}, nil

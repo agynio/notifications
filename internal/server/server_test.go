@@ -14,25 +14,18 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	agentsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/agents/v1"
-	authorizationv1 "github.com/agynio/notifications/internal/.gen/agynio/api/authorization/v1"
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
-	runnersv1 "github.com/agynio/notifications/internal/.gen/agynio/api/runners/v1"
 	"github.com/agynio/notifications/internal/server"
 	"github.com/agynio/notifications/internal/stream"
 )
 
-const (
-	bufSize             = 1024 * 1024
-	identityMetadataKey = "x-identity-id"
-)
+const bufSize = 1024 * 1024
 
 func TestPublish(t *testing.T) {
 	t.Parallel()
@@ -118,9 +111,8 @@ func TestSubscribeFiltersRooms(t *testing.T) {
 	t.Parallel()
 
 	hub := stream.NewHub(4, zap.NewNop())
-	auth := &authStub{allowed: true}
 	orgID := uuid.New()
-	client, cleanup := startTestServer(t, &publisherStub{}, hub, server.WithAuthorizationClient(auth))
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -166,26 +158,14 @@ func TestSubscribeFiltersRooms(t *testing.T) {
 	if !proto.Equal(matching, msg.GetEnvelope()) {
 		t.Fatalf("unexpected envelope: %+v", msg.GetEnvelope())
 	}
-	if len(auth.requests) != 0 {
-		t.Fatalf("expected no authorization requests, got %d", len(auth.requests))
-	}
 }
 
 func TestSubscribeCanonicalizesRooms(t *testing.T) {
 	t.Parallel()
 
 	hub := stream.NewHub(4, zap.NewNop())
-	orgID := uuid.New()
 	workloadID := uuid.New()
-	store := server.NewWorkloadOrgIndex()
-	store.RecordEnvelope(&notificationsv1.NotificationEnvelope{Rooms: []string{
-		fmt.Sprintf("workload:%s", workloadID),
-		fmt.Sprintf("organization:%s", orgID),
-	}})
-	client, cleanup := startTestServer(t, &publisherStub{}, hub,
-		server.WithWorkloadOrgResolver(store),
-		server.WithWorkloadOrgRecorder(store),
-	)
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
 
 	requestRoom := fmt.Sprintf("workload: %s", workloadID)
@@ -227,19 +207,8 @@ func TestSubscribeTraceCanonicalizesRooms(t *testing.T) {
 	t.Parallel()
 
 	hub := stream.NewHub(4, zap.NewNop())
-	organizationID := uuid.New()
 	traceID := "0123456789abcdef0123456789abcdef"
-	store := server.NewTraceOrgIndex()
-	store.RecordEnvelope(&notificationsv1.NotificationEnvelope{
-		Rooms: []string{fmt.Sprintf("trace:%s", traceID)},
-		Payload: &structpb.Struct{Fields: map[string]*structpb.Value{
-			"organization_id": structpb.NewStringValue(organizationID.String()),
-		}},
-	})
-	client, cleanup := startTestServer(t, &publisherStub{}, hub,
-		server.WithTraceOrgResolver(store),
-		server.WithTraceOrgRecorder(store),
-	)
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
 
 	requestRoom := fmt.Sprintf("trace:%s", strings.ToUpper(traceID))
@@ -427,12 +396,7 @@ func TestSubscribeWorkloadRoom(t *testing.T) {
 	room := fmt.Sprintf("workload:%s", workloadID)
 
 	hub := stream.NewHub(2, zap.NewNop())
-	authClient := &authStub{allowed: false}
-	runnersClient := &runnersStub{workload: &runnersv1.Workload{OrganizationId: uuid.NewString()}}
-	client, cleanup := startTestServer(t, &publisherStub{}, hub,
-		server.WithAuthorizationClient(authClient),
-		server.WithRunnersClient(runnersClient),
-	)
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -449,12 +413,6 @@ func TestSubscribeWorkloadRoom(t *testing.T) {
 
 	if _, err := streamClient.Recv(); err != nil {
 		t.Fatalf("Recv returned error: %v", err)
-	}
-	if len(runnersClient.requests) != 0 {
-		t.Fatalf("expected no workload lookups, got %d", len(runnersClient.requests))
-	}
-	if len(authClient.requests) != 0 {
-		t.Fatalf("expected no authorization checks, got %d", len(authClient.requests))
 	}
 }
 
@@ -549,62 +507,6 @@ func (p *publisherStub) Publish(ctx context.Context, envelope *notificationsv1.N
 	}
 	p.envelope = proto.Clone(envelope).(*notificationsv1.NotificationEnvelope)
 	return nil
-}
-
-type authStub struct {
-	allowed  bool
-	err      error
-	requests []*authorizationv1.CheckRequest
-}
-
-func (a *authStub) Check(ctx context.Context, req *authorizationv1.CheckRequest, _ ...grpc.CallOption) (*authorizationv1.CheckResponse, error) {
-	a.requests = append(a.requests, req)
-	if a.err != nil {
-		return nil, a.err
-	}
-	return &authorizationv1.CheckResponse{Allowed: a.allowed}, nil
-}
-
-type runnersStub struct {
-	workload       *runnersv1.Workload
-	err            error
-	requests       []*runnersv1.GetWorkloadRequest
-	identityHeader string
-}
-
-func (r *runnersStub) GetWorkload(ctx context.Context, req *runnersv1.GetWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.GetWorkloadResponse, error) {
-	r.requests = append(r.requests, req)
-	if md, ok := metadata.FromOutgoingContext(ctx); ok {
-		values := md.Get(identityMetadataKey)
-		if len(values) > 0 {
-			r.identityHeader = values[0]
-		}
-	}
-	if r.err != nil {
-		return nil, r.err
-	}
-	return &runnersv1.GetWorkloadResponse{Workload: r.workload}, nil
-}
-
-type agentsStub struct {
-	agent          *agentsv1.Agent
-	err            error
-	requests       []*agentsv1.GetAgentRequest
-	identityHeader string
-}
-
-func (a *agentsStub) GetAgent(ctx context.Context, req *agentsv1.GetAgentRequest, _ ...grpc.CallOption) (*agentsv1.GetAgentResponse, error) {
-	a.requests = append(a.requests, req)
-	if md, ok := metadata.FromOutgoingContext(ctx); ok {
-		values := md.Get(identityMetadataKey)
-		if len(values) > 0 {
-			a.identityHeader = values[0]
-		}
-	}
-	if a.err != nil {
-		return nil, a.err
-	}
-	return &agentsv1.GetAgentResponse{Agent: a.agent}, nil
 }
 
 type noopHub struct{}
