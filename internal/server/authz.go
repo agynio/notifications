@@ -20,6 +20,7 @@ import (
 
 const (
 	identityMetadata                  = "x-identity-id"
+	serviceTokenMetadata              = "x-service-token"
 	organizationMemberRelation        = "member"
 	organizationViewWorkloadsRelation = "can_view_workloads"
 	identityObjectPrefix              = "identity:"
@@ -44,6 +45,44 @@ func identityFromMetadata(ctx context.Context) (uuid.UUID, bool, error) {
 		return uuid.UUID{}, true, err
 	}
 	return identityID, true, nil
+}
+
+func serviceTokenFromMetadata(ctx context.Context) (string, bool, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "", false, nil
+	}
+	values := md.Get(serviceTokenMetadata)
+	if len(values) == 0 {
+		return "", false, nil
+	}
+	if len(values) != 1 {
+		return "", true, fmt.Errorf("expected single %s", serviceTokenMetadata)
+	}
+	trimmed := strings.TrimSpace(values[0])
+	if trimmed == "" {
+		return "", true, fmt.Errorf("%s is empty", serviceTokenMetadata)
+	}
+	return trimmed, true, nil
+}
+
+func (s *Server) authorizeInternalSubscribe(ctx context.Context, rooms []subscriptionRoom) error {
+	token, hasToken, err := serviceTokenFromMetadata(ctx)
+	if err != nil {
+		return status.Errorf(codes.Unauthenticated, "unauthenticated: %v", err)
+	}
+	if !hasToken || s.internalSubscribeToken == "" || token != s.internalSubscribeToken {
+		return status.Error(codes.Unauthenticated, "unauthenticated")
+	}
+	for _, room := range rooms {
+		switch room.kind {
+		case roomKindThreadParticipant, roomKindAgent:
+			continue
+		default:
+			return status.Error(codes.PermissionDenied, "permission denied")
+		}
+	}
+	return nil
 }
 
 func (s *Server) authorizeSubscribe(ctx context.Context, identityID uuid.UUID, rooms []subscriptionRoom) error {
