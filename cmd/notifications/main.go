@@ -142,6 +142,7 @@ func run() error {
 			server.WithWorkloadOrgRecorder(workloadOrgIndex),
 			server.WithTraceOrgResolver(traceOrgIndex),
 			server.WithTraceOrgRecorder(traceOrgIndex),
+			server.WithInternalSubscribeToken(cfg.InternalSubscribeToken),
 		),
 	)
 

@@ -30,8 +30,9 @@ import (
 )
 
 const (
-	bufSize             = 1024 * 1024
-	identityMetadataKey = "x-identity-id"
+	bufSize                 = 1024 * 1024
+	identityMetadataKey     = "x-identity-id"
+	serviceTokenMetadataKey = "x-service-token"
 )
 
 func TestPublish(t *testing.T) {
@@ -513,8 +514,8 @@ func TestSubscribeWorkloadAuthorization(t *testing.T) {
 			if len(authClient.requests) != 1 {
 				t.Fatalf("expected 1 authorization request, got %d", len(authClient.requests))
 			}
-			if authClient.requests[0].GetTupleKey().GetRelation() != "can_view_workloads" {
-				t.Fatalf("expected can_view_workloads relation, got %s", authClient.requests[0].GetTupleKey().GetRelation())
+			if authClient.requests[0].GetTupleKey().GetRelation() != "member" {
+				t.Fatalf("expected member relation, got %s", authClient.requests[0].GetTupleKey().GetRelation())
 			}
 			if authClient.requests[0].GetTupleKey().GetObject() != fmt.Sprintf("organization:%s", organizationID) {
 				t.Fatalf("unexpected object: %s", authClient.requests[0].GetTupleKey().GetObject())
@@ -832,21 +833,73 @@ func TestSubscribeUnknownRoomAuthorization(t *testing.T) {
 	}
 }
 
-func TestSubscribeRequiresIdentity(t *testing.T) {
+func TestSubscribeRejectsInternalWithoutToken(t *testing.T) {
 	t.Parallel()
 
 	hub := stream.NewHub(2, zap.NewNop())
-	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	client, cleanup := startTestServer(t, &publisherStub{}, hub, server.WithInternalSubscribeToken("internal-token"))
 	defer cleanup()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{fmt.Sprintf("workload:%s", uuid.NewString())}})
-	if err == nil {
-		_, err = streamClient.Recv()
+
+	room := fmt.Sprintf("thread_participant:%s", uuid.NewString())
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
 	}
+	_, err = streamClient.Recv()
 	if status.Code(err) != codes.Unauthenticated {
-		t.Fatalf("expected unauthenticated code, got %v", status.Code(err))
+		t.Fatalf("expected Unauthenticated error, got %v", status.Code(err))
+	}
+}
+
+func TestSubscribeRejectsInternalRoomKind(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(2, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub, server.WithInternalSubscribeToken("internal-token"))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs(serviceTokenMetadataKey, "internal-token"))
+
+	room := fmt.Sprintf("workload:%s", uuid.NewString())
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	_, err = streamClient.Recv()
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied error, got %v", status.Code(err))
+	}
+}
+
+func TestSubscribeAllowsInternalWithToken(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(2, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub, server.WithInternalSubscribeToken("internal-token"))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ctx = metadata.NewOutgoingContext(ctx, metadata.Pairs(serviceTokenMetadataKey, "internal-token"))
+
+	room := fmt.Sprintf("thread_participant:%s", uuid.NewString())
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		hub.Broadcast(&notificationsv1.NotificationEnvelope{Id: uuid.NewString(), Ts: timestamppb.Now(), Rooms: []string{room}})
+	}()
+
+	if _, err := streamClient.Recv(); err != nil {
+		t.Fatalf("Recv returned error: %v", err)
 	}
 }
 
@@ -941,15 +994,19 @@ func startTestServer(t *testing.T, publisher server.Publisher, hub server.Subscr
 		return listener.Dial()
 	}
 
-	conn, err := grpc.DialContext(context.Background(), "bufnet", grpc.WithContextDialer(dialer), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient("passthrough:///bufnet", grpc.WithContextDialer(dialer), grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("failed to dial bufnet: %v", err)
 	}
 
 	client := notificationsv1.NewNotificationsServiceClient(conn)
 	cleanup := func() {
-		conn.Close()
-		listener.Close()
+		if err := conn.Close(); err != nil {
+			t.Errorf("close connection: %v", err)
+		}
+		if err := listener.Close(); err != nil {
+			t.Errorf("close listener: %v", err)
+		}
 		grpcServer.Stop()
 	}
 

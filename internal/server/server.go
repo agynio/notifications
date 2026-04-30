@@ -80,23 +80,31 @@ func WithTraceOrgRecorder(recorder TraceOrgRecorder) Option {
 	}
 }
 
+// WithInternalSubscribeToken configures the service token required for internal subscriptions.
+func WithInternalSubscribeToken(token string) Option {
+	return func(s *Server) {
+		s.internalSubscribeToken = strings.TrimSpace(token)
+	}
+}
+
 // Server implements the NotificationsService gRPC handlers.
 type Server struct {
 	notificationsv1.UnimplementedNotificationsServiceServer
 
-	logger              *zap.Logger
-	publisher           Publisher
-	hub                 SubscriptionHub
-	clock               Clock
-	idGenerator         IDGenerator
-	authorizationClient AuthorizationClient
-	runnersClient       RunnersClient
-	agentsClient        AgentsClient
-	tracingClient       TracingClient
-	workloadOrgResolver WorkloadOrgResolver
-	workloadOrgRecorder WorkloadOrgRecorder
-	traceOrgResolver    TraceOrgResolver
-	traceOrgRecorder    TraceOrgRecorder
+	logger                 *zap.Logger
+	publisher              Publisher
+	hub                    SubscriptionHub
+	clock                  Clock
+	idGenerator            IDGenerator
+	authorizationClient    AuthorizationClient
+	runnersClient          RunnersClient
+	agentsClient           AgentsClient
+	tracingClient          TracingClient
+	workloadOrgResolver    WorkloadOrgResolver
+	workloadOrgRecorder    WorkloadOrgRecorder
+	traceOrgResolver       TraceOrgResolver
+	traceOrgRecorder       TraceOrgRecorder
+	internalSubscribeToken string
 }
 
 // New constructs a Server with the provided dependencies.
@@ -155,17 +163,29 @@ func (s *Server) Subscribe(req *notificationsv1.SubscribeRequest, stream notific
 	if err != nil {
 		return status.Errorf(codes.Unauthenticated, "unauthenticated: %v", err)
 	}
-	if !hasIdentity {
-		return status.Error(codes.Unauthenticated, "unauthenticated")
-	}
-
 	rooms, err := parseSubscribeRooms(req)
 	if err != nil {
 		return err
 	}
 
-	if err := s.authorizeSubscribe(ctx, callerID, rooms); err != nil {
-		return err
+	// Reject unknown room kinds for both internal and external subscribers.
+	for _, room := range rooms {
+		if room.kind == roomKindOther {
+			return status.Error(codes.PermissionDenied, "permission denied")
+		}
+	}
+
+	// External subscribers (via the Gateway) carry x-identity-id metadata and are
+	// authorized per room. Internal subscribers must present a service token and
+	// are limited to an allowlist of room kinds.
+	if hasIdentity {
+		if err := s.authorizeSubscribe(ctx, callerID, rooms); err != nil {
+			return err
+		}
+	} else {
+		if err := s.authorizeInternalSubscribe(ctx, rooms); err != nil {
+			return err
+		}
 	}
 
 	ch, cancel := s.hub.Subscribe(roomNames(rooms))

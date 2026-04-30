@@ -22,17 +22,18 @@ const (
 
 // Config captures runtime configuration derived from the environment.
 type Config struct {
-	GRPCAddr          string
-	RedisAddr         string
-	RedisPassword     string
-	RedisDB           int
-	RedisChannel      string
-	StreamBufferSize  int
-	LogLevel          string
-	AuthorizationAddr string
-	RunnersAddr       string
-	AgentsAddr        string
-	TracingAddr       string
+	GRPCAddr               string
+	RedisAddr              string
+	RedisPassword          string
+	RedisDB                int
+	RedisChannel           string
+	StreamBufferSize       int
+	LogLevel               string
+	AuthorizationAddr      string
+	RunnersAddr            string
+	AgentsAddr             string
+	TracingAddr            string
+	InternalSubscribeToken string
 }
 
 // Load reads configuration from environment variables, applying defaults when
@@ -60,6 +61,7 @@ func Load() (Config, error) {
 	cfg.RunnersAddr = readEnv("RUNNERS_ADDR", defaultRunnersServiceAddr)
 	cfg.AgentsAddr = readEnv("AGENTS_ADDR", defaultAgentsServiceAddr)
 	cfg.TracingAddr = readEnv("TRACING_ADDR", defaultTracingServiceAddr)
+	cfg.InternalSubscribeToken = readEnv("INTERNAL_SUBSCRIBE_TOKEN", "")
 
 	bufferStr := readEnv("STREAM_BUFFER_SIZE", "")
 	if bufferStr == "" {
