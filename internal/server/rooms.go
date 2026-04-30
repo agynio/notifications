@@ -4,14 +4,12 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 const (
@@ -158,132 +156,4 @@ func parseRoomTraceID(room string) (string, bool, error) {
 		return "", true, err
 	}
 	return strings.ToLower(raw), true, nil
-}
-
-type WorkloadOrgResolver interface {
-	OrgIDForWorkload(workloadID uuid.UUID) (uuid.UUID, bool)
-}
-
-type WorkloadOrgRecorder interface {
-	RecordEnvelope(envelope *notificationsv1.NotificationEnvelope)
-}
-
-type TraceOrgResolver interface {
-	OrgIDForTrace(traceID string) (uuid.UUID, bool)
-}
-
-type TraceOrgRecorder interface {
-	RecordEnvelope(envelope *notificationsv1.NotificationEnvelope)
-}
-
-type WorkloadOrgIndex struct {
-	mu         sync.RWMutex
-	byWorkload map[uuid.UUID]uuid.UUID
-}
-
-func NewWorkloadOrgIndex() *WorkloadOrgIndex {
-	return &WorkloadOrgIndex{byWorkload: make(map[uuid.UUID]uuid.UUID)}
-}
-
-func (w *WorkloadOrgIndex) RecordEnvelope(envelope *notificationsv1.NotificationEnvelope) {
-	if envelope == nil {
-		return
-	}
-	rooms := envelope.GetRooms()
-	if len(rooms) == 0 {
-		return
-	}
-	var (
-		workloadID    uuid.UUID
-		orgID         uuid.UUID
-		foundWorkload bool
-		foundOrg      bool
-	)
-	for _, room := range rooms {
-		if id, matched, err := parseRoomUUID(room, workloadRoomPrefix); matched && err == nil {
-			workloadID = id
-			foundWorkload = true
-		}
-		if id, matched, err := parseRoomUUID(room, organizationRoomPrefix); matched && err == nil {
-			orgID = id
-			foundOrg = true
-		}
-	}
-	if !foundWorkload || !foundOrg {
-		return
-	}
-	w.mu.Lock()
-	w.byWorkload[workloadID] = orgID
-	w.mu.Unlock()
-}
-
-func (w *WorkloadOrgIndex) OrgIDForWorkload(workloadID uuid.UUID) (uuid.UUID, bool) {
-	w.mu.RLock()
-	orgID, ok := w.byWorkload[workloadID]
-	w.mu.RUnlock()
-	return orgID, ok
-}
-
-type TraceOrgIndex struct {
-	mu      sync.RWMutex
-	byTrace map[string]uuid.UUID
-}
-
-func NewTraceOrgIndex() *TraceOrgIndex {
-	return &TraceOrgIndex{byTrace: make(map[string]uuid.UUID)}
-}
-
-func (t *TraceOrgIndex) RecordEnvelope(envelope *notificationsv1.NotificationEnvelope) {
-	if envelope == nil {
-		return
-	}
-	traceID, ok := traceIDFromRooms(envelope.GetRooms())
-	if !ok {
-		return
-	}
-	orgID, ok := organizationIDFromPayload(envelope.GetPayload())
-	if !ok {
-		return
-	}
-	t.mu.Lock()
-	t.byTrace[traceID] = orgID
-	t.mu.Unlock()
-}
-
-func (t *TraceOrgIndex) OrgIDForTrace(traceID string) (uuid.UUID, bool) {
-	t.mu.RLock()
-	orgID, ok := t.byTrace[traceID]
-	t.mu.RUnlock()
-	return orgID, ok
-}
-
-func traceIDFromRooms(rooms []string) (string, bool) {
-	if len(rooms) == 0 {
-		return "", false
-	}
-	for _, room := range rooms {
-		if traceID, matched, err := parseRoomTraceID(room); matched && err == nil {
-			return traceID, true
-		}
-	}
-	return "", false
-}
-
-func organizationIDFromPayload(payload *structpb.Struct) (uuid.UUID, bool) {
-	if payload == nil {
-		return uuid.UUID{}, false
-	}
-	field := payload.GetFields()["organization_id"]
-	if field == nil {
-		return uuid.UUID{}, false
-	}
-	stringValue, ok := field.Kind.(*structpb.Value_StringValue)
-	if !ok {
-		return uuid.UUID{}, false
-	}
-	orgID, err := parseUUID(stringValue.StringValue)
-	if err != nil {
-		return uuid.UUID{}, false
-	}
-	return orgID, true
 }
