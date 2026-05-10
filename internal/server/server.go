@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -105,12 +106,47 @@ func (s *Server) Publish(ctx context.Context, req *notificationsv1.PublishReques
 	return &notificationsv1.PublishResponse{Id: envelope.Id, Ts: envelope.Ts}, nil
 }
 
+func identityIDFromContext(ctx context.Context) (uuid.UUID, error) {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return uuid.UUID{}, status.Error(codes.Unauthenticated, "identity not available")
+	}
+	for _, value := range md.Get("x-identity-id") {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		id, err := uuid.Parse(trimmed)
+		if err != nil {
+			return uuid.UUID{}, status.Errorf(codes.Unauthenticated, "invalid identity metadata: %v", err)
+		}
+		return id, nil
+	}
+	return uuid.UUID{}, status.Error(codes.Unauthenticated, "identity not available")
+}
+
+func authorizeSubscribeRooms(callerID uuid.UUID, rooms []subscriptionRoom) error {
+	for _, room := range rooms {
+		if room.kind == roomKindThreadParticipant && room.id != callerID {
+			return status.Error(codes.PermissionDenied, "permission denied")
+		}
+	}
+	return nil
+}
+
 // Subscribe streams live notifications to the caller until the context is
 // cancelled or the subscription is otherwise terminated.
 func (s *Server) Subscribe(req *notificationsv1.SubscribeRequest, stream notificationsv1.NotificationsService_SubscribeServer) error {
 	ctx := stream.Context()
-	rooms, err := parseSubscribeRooms(req)
+	callerID, err := identityIDFromContext(ctx)
 	if err != nil {
+		return err
+	}
+	rooms, err := parseSubscribeRooms(req, callerID)
+	if err != nil {
+		return err
+	}
+	if err := authorizeSubscribeRooms(callerID, rooms); err != nil {
 		return err
 	}
 

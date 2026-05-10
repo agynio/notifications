@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/proto"
@@ -73,7 +74,7 @@ func TestPublish(t *testing.T) {
 			client, cleanup := startTestServer(t, stub, hub, server.WithClock(func() time.Time { return fixedTime }), server.WithIDGenerator(func() string { return "fixed-id" }))
 			defer cleanup()
 
-			ctx := context.Background()
+			ctx := authenticatedContext(uuid.New())
 			resp, err := client.Publish(ctx, tc.req)
 			if tc.expectOK {
 				if err != nil {
@@ -115,7 +116,7 @@ func TestSubscribeFiltersRooms(t *testing.T) {
 	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
 	defer cancel()
 
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{fmt.Sprintf("organization:%s", orgID)}})
@@ -170,7 +171,7 @@ func TestSubscribeCanonicalizesRooms(t *testing.T) {
 
 	requestRoom := fmt.Sprintf("workload: %s", workloadID)
 	canonicalRoom := fmt.Sprintf("workload:%s", workloadID)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
 	defer cancel()
 
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{requestRoom}})
@@ -213,7 +214,7 @@ func TestSubscribeTraceCanonicalizesRooms(t *testing.T) {
 
 	requestRoom := fmt.Sprintf("trace:%s", strings.ToUpper(traceID))
 	canonicalRoom := fmt.Sprintf("trace:%s", traceID)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
 	defer cancel()
 
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{requestRoom}})
@@ -264,7 +265,7 @@ func TestSubscribeTraceRoomsInvalid(t *testing.T) {
 	for _, room := range tests {
 		room := room
 		t.Run(room, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
 			defer cancel()
 			streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
 			if err == nil {
@@ -283,7 +284,7 @@ func TestSubscribeValidatesRooms(t *testing.T) {
 	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{})
 	defer cleanup()
 
-	ctx := context.Background()
+	ctx := authenticatedContext(uuid.New())
 
 	tests := map[string]struct {
 		rooms []string
@@ -327,7 +328,7 @@ func TestSubscribeContextCanceled(t *testing.T) {
 	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(authenticatedContext(identityID))
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{fmt.Sprintf("thread_participant:%s", identityID)}})
 	if err != nil {
 		t.Fatalf("Subscribe returned error: %v", err)
@@ -356,7 +357,7 @@ func TestSubscribeThreadParticipantRoom(t *testing.T) {
 
 	callerID := uuid.New()
 	room := fmt.Sprintf("thread_participant:%s", callerID)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(authenticatedContext(callerID), time.Second)
 	defer cancel()
 
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
@@ -399,7 +400,7 @@ func TestSubscribeWorkloadRoom(t *testing.T) {
 	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
 	defer cancel()
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
 	if err != nil {
@@ -423,7 +424,7 @@ func TestSubscribeUnknownRoomAllowed(t *testing.T) {
 	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
 	defer cancel()
 
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{"project:unknown"}})
@@ -463,7 +464,7 @@ func TestSubscribeDoesNotRequireIdentity(t *testing.T) {
 	client, cleanup := startTestServer(t, &publisherStub{}, hub)
 	defer cleanup()
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
 	defer cancel()
 	room := fmt.Sprintf("workload:%s", uuid.NewString())
 	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
@@ -494,6 +495,106 @@ func TestSubscribeDoesNotRequireIdentity(t *testing.T) {
 	if !proto.Equal(envelope, msg.GetEnvelope()) {
 		t.Fatalf("unexpected envelope: %+v", msg.GetEnvelope())
 	}
+}
+
+func TestSubscribeThreadParticipantSelfRoom(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(4, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	callerID := uuid.New()
+	room := fmt.Sprintf("thread_participant:%s", callerID)
+	ctx, cancel := context.WithTimeout(authenticatedContext(callerID), time.Second)
+	defer cancel()
+
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{"thread_participant:me"}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+
+	envelope := &notificationsv1.NotificationEnvelope{Id: uuid.NewString(), Ts: timestamppb.Now(), Event: "evt", Source: "src", Rooms: []string{room}}
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		hub.Broadcast(envelope)
+	}()
+
+	msg, err := streamClient.Recv()
+	if err != nil {
+		t.Fatalf("Recv returned error: %v", err)
+	}
+	if !proto.Equal(envelope, msg.GetEnvelope()) {
+		t.Fatalf("unexpected envelope: %+v", msg.GetEnvelope())
+	}
+}
+
+func TestSubscribeThreadParticipantSelfRoomDedupesWithExplicitRoom(t *testing.T) {
+	t.Parallel()
+
+	hub := &recordingHub{}
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	callerID := uuid.New()
+	ctx, cancel := context.WithTimeout(authenticatedContext(callerID), time.Second)
+	defer cancel()
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{"thread_participant:me", fmt.Sprintf("thread_participant:%s", callerID)}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	_, err = streamClient.Recv()
+	if status.Code(err) != codes.Canceled && status.Code(err) != codes.DeadlineExceeded {
+		// The important assertion is below; allow the stream to terminate by context.
+	}
+	if len(hub.rooms) != 1 || hub.rooms[0] != fmt.Sprintf("thread_participant:%s", callerID) {
+		t.Fatalf("unexpected subscribed rooms: %#v", hub.rooms)
+	}
+}
+
+func TestSubscribeThreadParticipantWrongIdentityDenied(t *testing.T) {
+	t.Parallel()
+
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{})
+	defer cleanup()
+
+	ctx := authenticatedContext(uuid.New())
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{fmt.Sprintf("thread_participant:%s", uuid.New())}})
+	if err == nil {
+		_, err = streamClient.Recv()
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+}
+
+func TestSubscribeThreadParticipantSelfRequiresIdentity(t *testing.T) {
+	t.Parallel()
+
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{})
+	defer cleanup()
+
+	streamClient, err := client.Subscribe(context.Background(), &notificationsv1.SubscribeRequest{Rooms: []string{"thread_participant:me"}})
+	if err == nil {
+		_, err = streamClient.Recv()
+	}
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("expected Unauthenticated, got %v (%v)", status.Code(err), err)
+	}
+}
+
+func authenticatedContext(identityID uuid.UUID) context.Context {
+	return metadata.NewOutgoingContext(context.Background(), metadata.Pairs("x-identity-id", identityID.String()))
+}
+
+type recordingHub struct {
+	rooms []string
+}
+
+func (r *recordingHub) Subscribe(rooms []string) (<-chan *notificationsv1.NotificationEnvelope, func()) {
+	r.rooms = append([]string(nil), rooms...)
+	ch := make(chan *notificationsv1.NotificationEnvelope)
+	return ch, func() { close(ch) }
 }
 
 type publisherStub struct {

@@ -18,6 +18,7 @@ const (
 	organizationRoomPrefix      = "organization:"
 	agentRoomPrefix             = "agent:"
 	traceRoomPrefix             = "trace:"
+	selfRoomIDSegment           = "me"
 )
 
 type roomKind int
@@ -38,7 +39,7 @@ type subscriptionRoom struct {
 	traceID string
 }
 
-func parseSubscribeRooms(req *notificationsv1.SubscribeRequest) ([]subscriptionRoom, error) {
+func parseSubscribeRooms(req *notificationsv1.SubscribeRequest, callerID uuid.UUID) ([]subscriptionRoom, error) {
 	if req == nil {
 		return nil, status.Error(codes.InvalidArgument, "request required")
 	}
@@ -53,7 +54,7 @@ func parseSubscribeRooms(req *notificationsv1.SubscribeRequest) ([]subscriptionR
 		if trimmed == "" {
 			return nil, status.Errorf(codes.InvalidArgument, "room %d is empty", i)
 		}
-		kind, id, traceID, canonical, err := classifyRoom(trimmed)
+		kind, id, traceID, canonical, err := classifyRoom(trimmed, callerID)
 		if err != nil {
 			return nil, status.Errorf(codes.InvalidArgument, "room %d: %v", i, err)
 		}
@@ -84,8 +85,16 @@ func roomNames(rooms []subscriptionRoom) []string {
 	return values
 }
 
-func classifyRoom(room string) (roomKind, uuid.UUID, string, string, error) {
-	if id, matched, err := parseRoomUUID(room, threadParticipantRoomPrefix); matched {
+func classifyRoom(room string, callerID uuid.UUID) (roomKind, uuid.UUID, string, string, error) {
+	if strings.HasPrefix(room, threadParticipantRoomPrefix) {
+		raw := strings.TrimSpace(strings.TrimPrefix(room, threadParticipantRoomPrefix))
+		if raw == selfRoomIDSegment {
+			if callerID == uuid.Nil {
+				return roomKindThreadParticipant, uuid.UUID{}, "", "", fmt.Errorf("thread_participant: caller identity is required for %q", selfRoomIDSegment)
+			}
+			return roomKindThreadParticipant, callerID, "", threadParticipantRoomPrefix + callerID.String(), nil
+		}
+		id, err := parseUUID(raw)
 		if err != nil {
 			return roomKindThreadParticipant, uuid.UUID{}, "", "", fmt.Errorf("thread_participant: %w", err)
 		}
