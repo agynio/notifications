@@ -659,13 +659,14 @@ func TestSubscribeInstanceInboxRequiresAgentInstanceIdentityType(t *testing.T) {
 	t.Parallel()
 
 	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{})
-	defer cleanup()
+	t.Cleanup(cleanup)
 
 	for _, identityType := range []string{"", "user", "app", "agent"} {
 		identityType := identityType
 		for _, room := range []string{"instance_inbox:me", fmt.Sprintf("instance_inbox:%s", uuid.New())} {
 			room := room
 			t.Run(identityType+"/"+room, func(t *testing.T) {
+				t.Parallel()
 				ctx := authenticatedContextWithType(uuid.New(), identityType)
 				streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
 				if err == nil {
