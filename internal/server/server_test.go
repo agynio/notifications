@@ -552,6 +552,133 @@ func TestSubscribeThreadParticipantSelfRoomDedupesWithExplicitRoom(t *testing.T)
 	}
 }
 
+func TestSubscribeInstanceInboxSelfRoom(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(4, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	callerID := uuid.New()
+	room := fmt.Sprintf("instance_inbox:%s", callerID)
+	ctx, cancel := context.WithTimeout(authenticatedContextWithType(callerID, "agent_instance"), time.Second)
+	defer cancel()
+
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{"instance_inbox:me"}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+
+	envelope := &notificationsv1.NotificationEnvelope{Id: uuid.NewString(), Ts: timestamppb.Now(), Event: "evt", Source: "src", Rooms: []string{room}}
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		hub.Broadcast(envelope)
+	}()
+
+	msg, err := streamClient.Recv()
+	if err != nil {
+		t.Fatalf("Recv returned error: %v", err)
+	}
+	if !proto.Equal(envelope, msg.GetEnvelope()) {
+		t.Fatalf("unexpected envelope: %+v", msg.GetEnvelope())
+	}
+}
+
+func TestSubscribeInstanceInboxSelfRoomDedupesWithExplicitRoom(t *testing.T) {
+	t.Parallel()
+
+	hub := &recordingHub{}
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	callerID := uuid.New()
+	ctx, cancel := context.WithTimeout(authenticatedContextWithType(callerID, "agent_instance"), time.Second)
+	defer cancel()
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{"instance_inbox:me", fmt.Sprintf("instance_inbox:%s", callerID)}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	_, err = streamClient.Recv()
+	if status.Code(err) != codes.Canceled && status.Code(err) != codes.DeadlineExceeded {
+		// The important assertion is below; allow the stream to terminate by context.
+	}
+	if len(hub.rooms) != 1 || hub.rooms[0] != fmt.Sprintf("instance_inbox:%s", callerID) {
+		t.Fatalf("unexpected subscribed rooms: %#v", hub.rooms)
+	}
+}
+
+func TestSubscribeInstanceInboxWrongIdentityDenied(t *testing.T) {
+	t.Parallel()
+
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{})
+	defer cleanup()
+
+	ctx := authenticatedContextWithType(uuid.New(), "agent_instance")
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{fmt.Sprintf("instance_inbox:%s", uuid.New())}})
+	if err == nil {
+		_, err = streamClient.Recv()
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+}
+
+func TestSubscribeInstanceInboxConcreteRoomAllowsMatchingAgentInstance(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(4, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	callerID := uuid.New()
+	room := fmt.Sprintf("instance_inbox:%s", callerID)
+	ctx, cancel := context.WithTimeout(authenticatedContextWithType(callerID, "agent_instance"), time.Second)
+	defer cancel()
+
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+
+	envelope := &notificationsv1.NotificationEnvelope{Id: uuid.NewString(), Ts: timestamppb.Now(), Event: "evt", Source: "src", Rooms: []string{room}}
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		hub.Broadcast(envelope)
+	}()
+
+	msg, err := streamClient.Recv()
+	if err != nil {
+		t.Fatalf("Recv returned error: %v", err)
+	}
+	if !proto.Equal(envelope, msg.GetEnvelope()) {
+		t.Fatalf("unexpected envelope: %+v", msg.GetEnvelope())
+	}
+}
+
+func TestSubscribeInstanceInboxRequiresAgentInstanceIdentityType(t *testing.T) {
+	t.Parallel()
+
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{})
+	defer cleanup()
+
+	for _, identityType := range []string{"", "user", "app", "agent"} {
+		identityType := identityType
+		for _, room := range []string{"instance_inbox:me", fmt.Sprintf("instance_inbox:%s", uuid.New())} {
+			room := room
+			t.Run(identityType+"/"+room, func(t *testing.T) {
+				ctx := authenticatedContextWithType(uuid.New(), identityType)
+				streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+				if err == nil {
+					_, err = streamClient.Recv()
+				}
+				if status.Code(err) != codes.PermissionDenied {
+					t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+				}
+			})
+		}
+	}
+}
+
 func TestSubscribeThreadParticipantWrongIdentityDenied(t *testing.T) {
 	t.Parallel()
 
@@ -584,7 +711,15 @@ func TestSubscribeThreadParticipantSelfRequiresIdentity(t *testing.T) {
 }
 
 func authenticatedContext(identityID uuid.UUID) context.Context {
-	return metadata.NewOutgoingContext(context.Background(), metadata.Pairs("x-identity-id", identityID.String()))
+	return authenticatedContextWithType(identityID, "")
+}
+
+func authenticatedContextWithType(identityID uuid.UUID, identityType string) context.Context {
+	pairs := []string{"x-identity-id", identityID.String()}
+	if identityType != "" {
+		pairs = append(pairs, "x-identity-type", identityType)
+	}
+	return metadata.NewOutgoingContext(context.Background(), metadata.Pairs(pairs...))
 }
 
 type recordingHub struct {

@@ -14,6 +14,7 @@ import (
 
 const (
 	threadParticipantRoomPrefix = "thread_participant:"
+	instanceInboxRoomPrefix     = "instance_inbox:"
 	workloadRoomPrefix          = "workload:"
 	organizationRoomPrefix      = "organization:"
 	agentRoomPrefix             = "agent:"
@@ -26,6 +27,7 @@ type roomKind int
 const (
 	roomKindOther roomKind = iota
 	roomKindThreadParticipant
+	roomKindInstanceInbox
 	roomKindWorkload
 	roomKindOrganization
 	roomKindAgent
@@ -99,6 +101,20 @@ func classifyRoom(room string, callerID uuid.UUID) (roomKind, uuid.UUID, string,
 			return roomKindThreadParticipant, uuid.UUID{}, "", "", fmt.Errorf("thread_participant: %w", err)
 		}
 		return roomKindThreadParticipant, id, "", threadParticipantRoomPrefix + id.String(), nil
+	}
+	if strings.HasPrefix(room, instanceInboxRoomPrefix) {
+		raw := strings.TrimSpace(strings.TrimPrefix(room, instanceInboxRoomPrefix))
+		if raw == selfRoomIDSegment {
+			if callerID == uuid.Nil {
+				return roomKindInstanceInbox, uuid.UUID{}, "", "", fmt.Errorf("instance_inbox: caller identity is required for %q", selfRoomIDSegment)
+			}
+			return roomKindInstanceInbox, callerID, "", instanceInboxRoomPrefix + callerID.String(), nil
+		}
+		id, err := parseUUID(raw)
+		if err != nil {
+			return roomKindInstanceInbox, uuid.UUID{}, "", "", fmt.Errorf("instance_inbox: %w", err)
+		}
+		return roomKindInstanceInbox, id, "", instanceInboxRoomPrefix + id.String(), nil
 	}
 	if id, matched, err := parseRoomUUID(room, workloadRoomPrefix); matched {
 		if err != nil {
