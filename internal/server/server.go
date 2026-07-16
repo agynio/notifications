@@ -106,6 +106,13 @@ func (s *Server) Publish(ctx context.Context, req *notificationsv1.PublishReques
 	return &notificationsv1.PublishResponse{Id: envelope.Id, Ts: envelope.Ts}, nil
 }
 
+type callerIdentity struct {
+	id           uuid.UUID
+	identityType string
+}
+
+const agentInstanceIdentityType = "agent_instance"
+
 func identityIDFromContext(ctx context.Context) (uuid.UUID, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -125,10 +132,39 @@ func identityIDFromContext(ctx context.Context) (uuid.UUID, error) {
 	return uuid.UUID{}, status.Error(codes.Unauthenticated, "identity not available")
 }
 
-func authorizeSubscribeRooms(callerID uuid.UUID, rooms []subscriptionRoom) error {
+func identityTypeFromContext(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	for _, value := range md.Get("x-identity-type") {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func callerIdentityFromContext(ctx context.Context) (callerIdentity, error) {
+	identityID, err := identityIDFromContext(ctx)
+	if err != nil {
+		return callerIdentity{}, err
+	}
+	return callerIdentity{id: identityID, identityType: identityTypeFromContext(ctx)}, nil
+}
+
+func authorizeSubscribeRooms(caller callerIdentity, rooms []subscriptionRoom) error {
 	for _, room := range rooms {
-		if room.kind == roomKindThreadParticipant && room.id != callerID {
-			return status.Error(codes.PermissionDenied, "permission denied")
+		switch room.kind {
+		case roomKindThreadParticipant:
+			if room.id != caller.id {
+				return status.Error(codes.PermissionDenied, "permission denied")
+			}
+		case roomKindInstanceInbox:
+			if room.id != caller.id || caller.identityType != agentInstanceIdentityType {
+				return status.Error(codes.PermissionDenied, "permission denied")
+			}
 		}
 	}
 	return nil
@@ -138,15 +174,15 @@ func authorizeSubscribeRooms(callerID uuid.UUID, rooms []subscriptionRoom) error
 // cancelled or the subscription is otherwise terminated.
 func (s *Server) Subscribe(req *notificationsv1.SubscribeRequest, stream notificationsv1.NotificationsService_SubscribeServer) error {
 	ctx := stream.Context()
-	callerID, err := identityIDFromContext(ctx)
+	caller, err := callerIdentityFromContext(ctx)
 	if err != nil {
 		return err
 	}
-	rooms, err := parseSubscribeRooms(req, callerID)
+	rooms, err := parseSubscribeRooms(req, caller.id)
 	if err != nil {
 		return err
 	}
-	if err := authorizeSubscribeRooms(callerID, rooms); err != nil {
+	if err := authorizeSubscribeRooms(caller, rooms); err != nil {
 		return err
 	}
 
