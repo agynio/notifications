@@ -173,8 +173,6 @@ dev:
         logs:
           enabled: true
           lastLines: 200
-    ports:
-      - port: "50051"
 
   e2e-runner:
     namespace: ${NOTIFICATIONS_NAMESPACE}
