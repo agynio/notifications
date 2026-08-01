@@ -149,7 +149,6 @@ dev:
     namespace: ${NOTIFICATIONS_NAMESPACE}
     labelSelector:
       app.kubernetes.io/name: notifications
-      app.kubernetes.io/instance: notifications
     containers:
       notifications:
         container: notifications
