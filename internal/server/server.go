@@ -60,8 +60,23 @@ type Server struct {
 	logger      *zap.Logger
 	publisher   Publisher
 	hub         SubscriptionHub
+	authz       Authorizer
+	workloads   WorkloadReader
+	agents      AgentReader
 	clock       Clock
 	idGenerator IDGenerator
+}
+
+// WithAuthorization supplies the clients Subscribe needs to decide who may
+// listen to an entity's room: the Authorization service, plus the two services
+// that own the entities whose rooms are keyed by something other than an
+// organization.
+func WithAuthorization(authz Authorizer, workloads WorkloadReader, agents AgentReader) Option {
+	return func(s *Server) {
+		s.authz = authz
+		s.workloads = workloads
+		s.agents = agents
+	}
 }
 
 // New constructs a Server with the provided dependencies.
@@ -154,7 +169,11 @@ func callerIdentityFromContext(ctx context.Context) (callerIdentity, error) {
 	return callerIdentity{id: identityID, identityType: identityTypeFromContext(ctx)}, nil
 }
 
-func authorizeSubscribeRooms(caller callerIdentity, rooms []subscriptionRoom) error {
+// authorizeSubscribeRooms applies the room access table in
+// architecture/authz.md#notifications-service. Identity-keyed rooms are settled
+// by equality; every other room is gated on the caller's relation to the
+// organization that owns the entity the room reports on.
+func (s *Server) authorizeSubscribeRooms(ctx context.Context, caller callerIdentity, rooms []subscriptionRoom) error {
 	for _, room := range rooms {
 		switch room.kind {
 		case roomKindThreadParticipant:
@@ -165,6 +184,52 @@ func authorizeSubscribeRooms(caller callerIdentity, rooms []subscriptionRoom) er
 			if room.id != caller.id || caller.identityType != agentInstanceIdentityType {
 				return status.Error(codes.PermissionDenied, "permission denied")
 			}
+		case roomKindSandboxOwner:
+			// Only the owner, and ":me" is deliberately not accepted here.
+			if room.id != caller.id {
+				return status.Error(codes.PermissionDenied, "permission denied")
+			}
+		case roomKindOrganization:
+			if err := s.requireOrganizationRelation(ctx, caller.id, room.id, memberRelation); err != nil {
+				return err
+			}
+		case roomKindSandboxOrg:
+			if err := s.requireOrganizationRelation(ctx, caller.id, room.id, canListSandboxesRelation); err != nil {
+				return err
+			}
+		case roomKindWorkload:
+			organizationID, err := s.workloadOrganization(ctx, room.id)
+			if err != nil {
+				return err
+			}
+			if err := s.requireOrganizationRelation(ctx, caller.id, organizationID, memberRelation); err != nil {
+				return err
+			}
+		case roomKindAgent:
+			organizationID, err := s.agentOrganization(ctx, room.id)
+			if err != nil {
+				return err
+			}
+			if err := s.requireOrganizationRelation(ctx, caller.id, organizationID, memberRelation); err != nil {
+				return err
+			}
+		case roomKindEgressRules:
+			// One global room, carrying rule invalidations to the Egress
+			// Gateway. It is not organization-keyed the way authz.md describes
+			// -- publisher and subscriber both use the bare literal -- so there
+			// is no organization to check against. Named here so the default
+			// below does not silently cut the gateway off.
+		case roomKindTrace, roomKindVolume:
+			// Both are specified as "member on the owning organization", and
+			// neither owner will say which organization that is: GetTrace
+			// returns raw OTLP spans, and neither the agents nor the runners
+			// Volume message carries an organization id. Closing these needs
+			// that field, so they stay open rather than break the console.
+		default:
+			// Unrecognised. Nothing publishes to it, so a subscription can only
+			// be a probe, and a room kind added later has to state its policy
+			// here rather than inherit an accidental allow.
+			return status.Error(codes.PermissionDenied, "permission denied")
 		}
 	}
 	return nil
@@ -182,7 +247,7 @@ func (s *Server) Subscribe(req *notificationsv1.SubscribeRequest, stream notific
 	if err != nil {
 		return err
 	}
-	if err := authorizeSubscribeRooms(caller, rooms); err != nil {
+	if err := s.authorizeSubscribeRooms(ctx, caller, rooms); err != nil {
 		return err
 	}
 

@@ -21,7 +21,10 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
+	agentsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/agents/v1"
+	authorizationv1 "github.com/agynio/notifications/internal/.gen/agynio/api/authorization/v1"
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
+	runnersv1 "github.com/agynio/notifications/internal/.gen/agynio/api/runners/v1"
 	"github.com/agynio/notifications/internal/server"
 	"github.com/agynio/notifications/internal/stream"
 )
@@ -417,7 +420,9 @@ func TestSubscribeWorkloadRoom(t *testing.T) {
 	}
 }
 
-func TestSubscribeUnknownRoomAllowed(t *testing.T) {
+// A room outside the table in architecture/authz.md has no publisher, so a
+// subscription to one can only be a probe.
+func TestSubscribeUnknownRoomDenied(t *testing.T) {
 	t.Parallel()
 
 	hub := stream.NewHub(2, zap.NewNop())
@@ -431,29 +436,59 @@ func TestSubscribeUnknownRoomAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe returned error: %v", err)
 	}
-
-	envelope := &notificationsv1.NotificationEnvelope{
-		Id:     uuid.NewString(),
-		Ts:     timestamppb.Now(),
-		Event:  "evt",
-		Source: "src",
-		Rooms:  []string{"project:unknown"},
-		Payload: &structpb.Struct{Fields: map[string]*structpb.Value{
-			"value": structpb.NewNumberValue(1),
-		}},
+	if _, err := streamClient.Recv(); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
 	}
+}
 
-	go func() {
-		time.Sleep(10 * time.Millisecond)
-		hub.Broadcast(envelope)
-	}()
+// A caller with no relation to the organization owning the entity is refused,
+// even though the room itself is well formed.
+func TestSubscribeDeniesUnrelatedCaller(t *testing.T) {
+	t.Parallel()
 
-	msg, err := streamClient.Recv()
+	hub := stream.NewHub(2, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub, server.WithAuthorization(denyAll{}, denyAll{}, denyAll{}))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
+	defer cancel()
+
+	for _, room := range []string{
+		"organization:" + uuid.NewString(),
+		"sandbox_org:" + uuid.NewString(),
+		"workload:" + uuid.NewString(),
+		"agent:" + uuid.NewString(),
+	} {
+		streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+		if err != nil {
+			t.Fatalf("Subscribe(%s) returned error: %v", room, err)
+		}
+		if _, err := streamClient.Recv(); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("%s: expected PermissionDenied, got %v (%v)", room, status.Code(err), err)
+		}
+	}
+}
+
+// Sandbox owner rooms are identity equality, with no authorization call at all,
+// so a permissive authorizer must not make someone else's room readable.
+func TestSubscribeSandboxOwnerRoomIsOwnerOnly(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(2, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
+	defer cancel()
+
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"sandbox_owner:" + uuid.NewString()},
+	})
 	if err != nil {
-		t.Fatalf("Recv returned error: %v", err)
+		t.Fatalf("Subscribe returned error: %v", err)
 	}
-	if !proto.Equal(envelope, msg.GetEnvelope()) {
-		t.Fatalf("unexpected envelope: %+v", msg.GetEnvelope())
+	if _, err := streamClient.Recv(); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
 	}
 }
 
@@ -753,11 +788,39 @@ func (n *noopHub) Subscribe(_ []string) (<-chan *notificationsv1.NotificationEnv
 	return ch, func() { close(ch) }
 }
 
+// allowAll answers every authorization check yes and reports a fixed
+// organization for any entity.
+type allowAll struct{}
+
+func (allowAll) Check(context.Context, *authorizationv1.CheckRequest, ...grpc.CallOption) (*authorizationv1.CheckResponse, error) {
+	return &authorizationv1.CheckResponse{Allowed: true}, nil
+}
+
+func (allowAll) GetWorkload(_ context.Context, _ *runnersv1.GetWorkloadRequest, _ ...grpc.CallOption) (*runnersv1.GetWorkloadResponse, error) {
+	return &runnersv1.GetWorkloadResponse{Workload: &runnersv1.Workload{OrganizationId: uuid.NewString()}}, nil
+}
+
+func (allowAll) GetAgent(_ context.Context, _ *agentsv1.GetAgentRequest, _ ...grpc.CallOption) (*agentsv1.GetAgentResponse, error) {
+	return &agentsv1.GetAgentResponse{Agent: &agentsv1.Agent{OrganizationId: uuid.NewString()}}, nil
+}
+
+// denyAll refuses every check but still resolves organizations, so a test can
+// tell "the caller has no relation" apart from "the lookup failed".
+type denyAll struct{ allowAll }
+
+func (denyAll) Check(context.Context, *authorizationv1.CheckRequest, ...grpc.CallOption) (*authorizationv1.CheckResponse, error) {
+	return &authorizationv1.CheckResponse{Allowed: false}, nil
+}
+
 func startTestServer(t *testing.T, publisher server.Publisher, hub server.SubscriptionHub, opts ...server.Option) (notificationsv1.NotificationsServiceClient, func()) {
 	t.Helper()
 
 	listener := bufconn.Listen(bufSize)
 	grpcServer := grpc.NewServer()
+	// Permissive by default so tests that are not about authorization keep
+	// exercising what they were written for; a test that cares passes its own
+	// WithAuthorization, which applies after these and wins.
+	opts = append([]server.Option{server.WithAuthorization(allowAll{}, allowAll{}, allowAll{})}, opts...)
 	notificationsv1.RegisterNotificationsServiceServer(grpcServer, server.New(publisher, hub, zap.NewNop(), opts...))
 
 	go func() {
