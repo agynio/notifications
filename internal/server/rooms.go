@@ -19,6 +19,10 @@ const (
 	organizationRoomPrefix      = "organization:"
 	agentRoomPrefix             = "agent:"
 	traceRoomPrefix             = "trace:"
+	sandboxOwnerRoomPrefix      = "sandbox_owner:"
+	sandboxOrgRoomPrefix        = "sandbox_org:"
+	volumeRoomPrefix            = "volume:"
+	egressRulesRoom             = "egress_rules"
 	selfRoomIDSegment           = "me"
 )
 
@@ -32,6 +36,10 @@ const (
 	roomKindOrganization
 	roomKindAgent
 	roomKindTrace
+	roomKindSandboxOwner
+	roomKindSandboxOrg
+	roomKindVolume
+	roomKindEgressRules
 )
 
 type subscriptionRoom struct {
@@ -88,6 +96,9 @@ func roomNames(rooms []subscriptionRoom) []string {
 }
 
 func classifyRoom(room string, callerID uuid.UUID) (roomKind, uuid.UUID, string, string, error) {
+	if room == egressRulesRoom {
+		return roomKindEgressRules, uuid.UUID{}, "", egressRulesRoom, nil
+	}
 	if strings.HasPrefix(room, threadParticipantRoomPrefix) {
 		raw := strings.TrimSpace(strings.TrimPrefix(room, threadParticipantRoomPrefix))
 		if raw == selfRoomIDSegment {
@@ -133,6 +144,24 @@ func classifyRoom(room string, callerID uuid.UUID) (roomKind, uuid.UUID, string,
 			return roomKindAgent, uuid.UUID{}, "", "", fmt.Errorf("agent: %w", err)
 		}
 		return roomKindAgent, id, "", agentRoomPrefix + id.String(), nil
+	}
+	if id, matched, err := parseRoomUUID(room, sandboxOwnerRoomPrefix); matched {
+		if err != nil {
+			return roomKindSandboxOwner, uuid.UUID{}, "", "", fmt.Errorf("sandbox_owner: %w", err)
+		}
+		return roomKindSandboxOwner, id, "", sandboxOwnerRoomPrefix + id.String(), nil
+	}
+	if id, matched, err := parseRoomUUID(room, sandboxOrgRoomPrefix); matched {
+		if err != nil {
+			return roomKindSandboxOrg, uuid.UUID{}, "", "", fmt.Errorf("sandbox_org: %w", err)
+		}
+		return roomKindSandboxOrg, id, "", sandboxOrgRoomPrefix + id.String(), nil
+	}
+	if id, matched, err := parseRoomUUID(room, volumeRoomPrefix); matched {
+		if err != nil {
+			return roomKindVolume, uuid.UUID{}, "", "", fmt.Errorf("volume: %w", err)
+		}
+		return roomKindVolume, id, "", volumeRoomPrefix + id.String(), nil
 	}
 	if traceID, matched, err := parseRoomTraceID(room); matched {
 		if err != nil {

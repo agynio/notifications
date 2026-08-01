@@ -11,7 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	agentsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/agents/v1"
+	authorizationv1 "github.com/agynio/notifications/internal/.gen/agynio/api/authorization/v1"
 	notificationsv1 "github.com/agynio/notifications/internal/.gen/agynio/api/notifications/v1"
+	runnersv1 "github.com/agynio/notifications/internal/.gen/agynio/api/runners/v1"
 	"github.com/agynio/notifications/internal/config"
 	"github.com/agynio/notifications/internal/logging"
 	redisstream "github.com/agynio/notifications/internal/redis"
@@ -21,6 +24,7 @@ import (
 	redis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -96,11 +100,41 @@ func run() error {
 		}
 	}()
 
+	// Subscribe authorizes every room against the organization that owns the
+	// entity it reports on, so it needs the Authorization service and the two
+	// services that can name that organization.
+	authzConn, err := grpc.NewClient(cfg.AuthorizationAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		forwardCancel()
+		subscriber.Stop()
+		return fmt.Errorf("connect to authorization service: %w", err)
+	}
+	defer func() { _ = authzConn.Close() }()
+	runnersConn, err := grpc.NewClient(cfg.RunnersAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		forwardCancel()
+		subscriber.Stop()
+		return fmt.Errorf("connect to runners service: %w", err)
+	}
+	defer func() { _ = runnersConn.Close() }()
+	agentsConn, err := grpc.NewClient(cfg.AgentsAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		forwardCancel()
+		subscriber.Stop()
+		return fmt.Errorf("connect to agents service: %w", err)
+	}
+	defer func() { _ = agentsConn.Close() }()
+
 	grpcServer := grpc.NewServer()
 	notificationsv1.RegisterNotificationsServiceServer(
 		grpcServer,
 		server.New(publisher, hub, logger,
 			server.WithClock(func() time.Time { return time.Now().UTC() }),
+			server.WithAuthorization(
+				authorizationv1.NewAuthorizationServiceClient(authzConn),
+				runnersv1.NewRunnersServiceClient(runnersConn),
+				agentsv1.NewAgentsServiceClient(agentsConn),
+			),
 		),
 	)
 
