@@ -458,6 +458,7 @@ func TestSubscribeDeniesUnrelatedCaller(t *testing.T) {
 		"sandbox_org:" + uuid.NewString(),
 		"workload:" + uuid.NewString(),
 		"agent:" + uuid.NewString(),
+		"agent_instance:" + uuid.NewString(),
 	} {
 		streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
 		if err != nil {
@@ -466,6 +467,26 @@ func TestSubscribeDeniesUnrelatedCaller(t *testing.T) {
 		if _, err := streamClient.Recv(); status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("%s: expected PermissionDenied, got %v (%v)", room, status.Code(err), err)
 		}
+	}
+}
+
+// The Orchestrator watches every instance it reconciles through this room, and
+// agents publishes instance.updated to it. The room was never recognised here,
+// so it fell to the deny-by-default branch and every one of those subscriptions
+// was refused -- a paused or resumed instance reached nobody.
+func TestSubscribeAgentInstanceRoomAllowsOrganizationMember(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(2, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	room := "agent_instance:" + uuid.NewString()
+	ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
+	defer cancel()
+
+	if _, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}}); err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
 	}
 }
 
@@ -802,6 +823,10 @@ func (allowAll) GetWorkload(_ context.Context, _ *runnersv1.GetWorkloadRequest, 
 
 func (allowAll) GetAgent(_ context.Context, _ *agentsv1.GetAgentRequest, _ ...grpc.CallOption) (*agentsv1.GetAgentResponse, error) {
 	return &agentsv1.GetAgentResponse{Agent: &agentsv1.Agent{OrganizationId: uuid.NewString()}}, nil
+}
+
+func (allowAll) GetInstance(_ context.Context, _ *agentsv1.GetInstanceRequest, _ ...grpc.CallOption) (*agentsv1.GetInstanceResponse, error) {
+	return &agentsv1.GetInstanceResponse{Instance: &agentsv1.AgentInstance{OrganizationId: uuid.NewString()}}, nil
 }
 
 // denyAll refuses every check but still resolves organizations, so a test can

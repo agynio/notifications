@@ -205,6 +205,19 @@ func (s *Server) authorizeSubscribeRooms(ctx context.Context, caller callerIdent
 			if err := s.requireOrganizationRelation(ctx, caller.id, organizationID, memberRelation); err != nil {
 				return err
 			}
+		// Instance state -- created, paused, resumed, terminated. Gated like
+		// the agent room it mirrors: member on the owning organization. That
+		// also admits the instance itself, whose identity satisfies member
+		// through its own org relation, which is how the Orchestrator watches
+		// the instances it reconciles.
+		case roomKindAgentInstance:
+			organizationID, err := s.agentInstanceOrganization(ctx, room.id)
+			if err != nil {
+				return err
+			}
+			if err := s.requireOrganizationRelation(ctx, caller.id, organizationID, memberRelation); err != nil {
+				return err
+			}
 		case roomKindAgent:
 			organizationID, err := s.agentOrganization(ctx, room.id)
 			if err != nil {

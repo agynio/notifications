@@ -15,6 +15,7 @@ import (
 const (
 	threadParticipantRoomPrefix = "thread_participant:"
 	instanceInboxRoomPrefix     = "instance_inbox:"
+	agentInstanceRoomPrefix     = "agent_instance:"
 	workloadRoomPrefix          = "workload:"
 	organizationRoomPrefix      = "organization:"
 	agentRoomPrefix             = "agent:"
@@ -32,6 +33,7 @@ const (
 	roomKindOther roomKind = iota
 	roomKindThreadParticipant
 	roomKindInstanceInbox
+	roomKindAgentInstance
 	roomKindWorkload
 	roomKindOrganization
 	roomKindAgent
@@ -126,6 +128,14 @@ func classifyRoom(room string, callerID uuid.UUID) (roomKind, uuid.UUID, string,
 			return roomKindInstanceInbox, uuid.UUID{}, "", "", fmt.Errorf("instance_inbox: %w", err)
 		}
 		return roomKindInstanceInbox, id, "", instanceInboxRoomPrefix + id.String(), nil
+	}
+	// Checked after instance_inbox: both begin "instance"-ish but neither is a
+	// prefix of the other, so order only matters for readability here.
+	if id, matched, err := parseRoomUUID(room, agentInstanceRoomPrefix); matched {
+		if err != nil {
+			return roomKindAgentInstance, uuid.UUID{}, "", "", fmt.Errorf("agent_instance: %w", err)
+		}
+		return roomKindAgentInstance, id, "", agentInstanceRoomPrefix + id.String(), nil
 	}
 	if id, matched, err := parseRoomUUID(room, workloadRoomPrefix); matched {
 		if err != nil {
