@@ -29,6 +29,7 @@ type WorkloadReader interface {
 // reason as WorkloadReader.
 type AgentReader interface {
 	GetAgent(ctx context.Context, req *agentsv1.GetAgentRequest, opts ...grpc.CallOption) (*agentsv1.GetAgentResponse, error)
+	GetInstance(ctx context.Context, req *agentsv1.GetInstanceRequest, opts ...grpc.CallOption) (*agentsv1.GetInstanceResponse, error)
 }
 
 const (
@@ -91,6 +92,18 @@ func (s *Server) agentOrganization(ctx context.Context, agentID uuid.UUID) (uuid
 		return uuid.UUID{}, status.Error(codes.PermissionDenied, "permission denied")
 	}
 	return parseOrganization(response.GetAgent().GetOrganizationId())
+}
+
+func (s *Server) agentInstanceOrganization(ctx context.Context, agentInstanceID uuid.UUID) (uuid.UUID, error) {
+	if s.agents == nil {
+		return uuid.UUID{}, status.Error(codes.Internal, "agents client is not configured")
+	}
+	response, err := s.agents.GetInstance(ctx, &agentsv1.GetInstanceRequest{Id: agentInstanceID.String()})
+	if err != nil {
+		s.logger.Warn("subscribe agent instance lookup failed")
+		return uuid.UUID{}, status.Error(codes.PermissionDenied, "permission denied")
+	}
+	return parseOrganization(response.GetInstance().GetOrganizationId())
 }
 
 func parseOrganization(value string) (uuid.UUID, error) {
