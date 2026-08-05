@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -41,8 +42,7 @@ const (
 )
 
 // requireOrganizationRelation resolves the caller's relation to an
-// organization. A failed lookup denies: a subscription outlives the request
-// that opened it, so anything short of a definite yes has to refuse.
+// organization. Nothing short of a definite yes admits the subscriber.
 func (s *Server) requireOrganizationRelation(ctx context.Context, caller uuid.UUID, organizationID uuid.UUID, relation string) error {
 	if s.authz == nil {
 		return status.Error(codes.Internal, "authorization is not configured")
@@ -55,13 +55,28 @@ func (s *Server) requireOrganizationRelation(ctx context.Context, caller uuid.UU
 		},
 	})
 	if err != nil {
-		s.logger.Warn("subscribe authorization check failed")
-		return status.Error(codes.PermissionDenied, "permission denied")
+		return s.refuse(ctx, "subscribe authorization check failed", err)
 	}
 	if !response.GetAllowed() {
 		return status.Error(codes.PermissionDenied, "permission denied")
 	}
 	return nil
+}
+
+// refuse reports a lookup that never produced a verdict. The subscriber is
+// turned away either way, but calling an unreachable or cancelled dependency
+// "permission denied" hides the cause behind an authorization verdict and
+// leaves the caller retrying something that was never about access. A missing
+// entity stays PermissionDenied so the room cannot be probed for existence.
+func (s *Server) refuse(ctx context.Context, message string, err error) error {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return status.FromContextError(ctxErr).Err()
+	}
+	if status.Code(err) == codes.NotFound {
+		return status.Error(codes.PermissionDenied, "permission denied")
+	}
+	s.logger.Warn(message, zap.Error(err))
+	return status.Error(codes.Unavailable, message)
 }
 
 // workloadOrganization reads the organization owning a workload. Notifications
@@ -74,8 +89,7 @@ func (s *Server) workloadOrganization(ctx context.Context, workloadID uuid.UUID)
 	}
 	response, err := s.workloads.GetWorkload(ctx, &runnersv1.GetWorkloadRequest{Id: workloadID.String()})
 	if err != nil {
-		s.logger.Warn("subscribe workload lookup failed")
-		return uuid.UUID{}, status.Error(codes.PermissionDenied, "permission denied")
+		return uuid.UUID{}, s.refuse(ctx, "subscribe workload lookup failed", err)
 	}
 	return parseOrganization(response.GetWorkload().GetOrganizationId())
 }
@@ -88,8 +102,7 @@ func (s *Server) agentOrganization(ctx context.Context, agentID uuid.UUID) (uuid
 	}
 	response, err := s.agents.GetAgent(ctx, &agentsv1.GetAgentRequest{Id: agentID.String()})
 	if err != nil {
-		s.logger.Warn("subscribe agent lookup failed")
-		return uuid.UUID{}, status.Error(codes.PermissionDenied, "permission denied")
+		return uuid.UUID{}, s.refuse(ctx, "subscribe agent lookup failed", err)
 	}
 	return parseOrganization(response.GetAgent().GetOrganizationId())
 }
@@ -100,8 +113,7 @@ func (s *Server) agentInstanceOrganization(ctx context.Context, agentInstanceID 
 	}
 	response, err := s.agents.GetInstance(ctx, &agentsv1.GetInstanceRequest{Id: agentInstanceID.String()})
 	if err != nil {
-		s.logger.Warn("subscribe agent instance lookup failed")
-		return uuid.UUID{}, status.Error(codes.PermissionDenied, "permission denied")
+		return uuid.UUID{}, s.refuse(ctx, "subscribe agent instance lookup failed", err)
 	}
 	return parseOrganization(response.GetInstance().GetOrganizationId())
 }

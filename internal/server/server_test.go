@@ -837,6 +837,63 @@ func (denyAll) Check(context.Context, *authorizationv1.CheckRequest, ...grpc.Cal
 	return &authorizationv1.CheckResponse{Allowed: false}, nil
 }
 
+// unavailableAuthz stands for an authorization service that cannot answer,
+// as opposed to one that answers no.
+type unavailableAuthz struct{ allowAll }
+
+func (unavailableAuthz) Check(context.Context, *authorizationv1.CheckRequest, ...grpc.CallOption) (*authorizationv1.CheckResponse, error) {
+	return nil, status.Error(codes.Unavailable, "authorization is down")
+}
+
+// missingInstance resolves nothing: the instance the room names is gone.
+type missingInstance struct{ allowAll }
+
+func (missingInstance) GetInstance(context.Context, *agentsv1.GetInstanceRequest, ...grpc.CallOption) (*agentsv1.GetInstanceResponse, error) {
+	return nil, status.Error(codes.NotFound, "no such instance")
+}
+
+// An unreachable authorization service is not a verdict. Reporting it as
+// PermissionDenied sent the subscriber retrying an access problem it never had.
+func TestSubscribeReportsUnavailableAuthorizationAsUnavailable(t *testing.T) {
+	callerID := uuid.New()
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{},
+		server.WithAuthorization(unavailableAuthz{}, allowAll{}, allowAll{}))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContext(callerID), time.Second)
+	defer cancel()
+	stream, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"organization:" + uuid.NewString()},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable, got %v", err)
+	}
+}
+
+// A room naming an instance that no longer exists stays PermissionDenied, so
+// the room cannot be probed for whether an instance is there.
+func TestSubscribeReportsMissingInstanceAsPermissionDenied(t *testing.T) {
+	callerID := uuid.New()
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{},
+		server.WithAuthorization(allowAll{}, allowAll{}, missingInstance{}))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContextWithType(callerID, "agent_instance"), time.Second)
+	defer cancel()
+	stream, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"agent_instance:" + uuid.NewString()},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
 func startTestServer(t *testing.T, publisher server.Publisher, hub server.SubscriptionHub, opts ...server.Option) (notificationsv1.NotificationsServiceClient, func()) {
 	t.Helper()
 
