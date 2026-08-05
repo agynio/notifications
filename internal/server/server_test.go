@@ -894,6 +894,46 @@ func TestSubscribeReportsMissingInstanceAsPermissionDenied(t *testing.T) {
 	}
 }
 
+// An instance is not a member of its organization, so gating its own room on
+// that relation denied the Orchestrator every subscription it opened as one.
+func TestSubscribeAllowsAnInstanceToWatchItsOwnRoom(t *testing.T) {
+	instanceID := uuid.New()
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{},
+		server.WithAuthorization(denyAll{}, allowAll{}, allowAll{}))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContextWithType(instanceID, "agent_instance"), 500*time.Millisecond)
+	defer cancel()
+	stream, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"agent_instance:" + instanceID.String()},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) == codes.PermissionDenied {
+		t.Fatal("an instance was denied its own room")
+	}
+}
+
+// Another instance's room is still gated on organization membership.
+func TestSubscribeDeniesAnInstanceAnotherInstancesRoom(t *testing.T) {
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{},
+		server.WithAuthorization(denyAll{}, allowAll{}, allowAll{}))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContextWithType(uuid.New(), "agent_instance"), time.Second)
+	defer cancel()
+	stream, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"agent_instance:" + uuid.NewString()},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v", err)
+	}
+}
+
 func startTestServer(t *testing.T, publisher server.Publisher, hub server.SubscriptionHub, opts ...server.Option) (notificationsv1.NotificationsServiceClient, func()) {
 	t.Helper()
 

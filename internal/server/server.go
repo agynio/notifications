@@ -211,6 +211,15 @@ func (s *Server) authorizeSubscribeRooms(ctx context.Context, caller callerIdent
 		// through its own org relation, which is how the Orchestrator watches
 		// the instances it reconciles.
 		case roomKindAgentInstance:
+			// The instance watching itself is settled by identity, as its inbox
+			// room already is. An instance is not a member of its organization,
+			// so requiring that relation denied the Orchestrator every time it
+			// subscribed as one -- it then saw no wake, and a message that
+			// arrived after the workload had synced its inbox was never
+			// delivered.
+			if room.id == caller.id && caller.identityType == agentInstanceIdentityType {
+				continue
+			}
 			organizationID, err := s.agentInstanceOrganization(ctx, room.id)
 			if err != nil {
 				return err
