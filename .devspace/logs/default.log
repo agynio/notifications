@@ -1,0 +1,6 @@
+{"level":"info","msg":"Using namespace 'default'","time":"2026-08-03T01:14:13+02:00"}
+{"level":"info","msg":"Using kube context 'agyn-local'","time":"2026-08-03T01:14:13+02:00"}
+{"level":"error","msg":"pipelines.test:e2e has to match the following regex: ^(([a-z0-9][a-z0-9\\-]*[a-z0-9])|([a-z0-9]))$","time":"2026-08-03T01:14:13+02:00"}
+{"level":"info","msg":"Using namespace 'default'","time":"2026-08-03T01:20:26+02:00"}
+{"level":"info","msg":"Using kube context 'agyn-local'","time":"2026-08-03T01:20:26+02:00"}
+{"level":"error","msg":"pipelines.test:e2e has to match the following regex: ^(([a-z0-9][a-z0-9\\-]*[a-z0-9])|([a-z0-9]))$","time":"2026-08-03T01:20:26+02:00"}
