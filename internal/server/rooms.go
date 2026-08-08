@@ -24,6 +24,8 @@ const (
 	sandboxOrgRoomPrefix        = "sandbox_org:"
 	volumeRoomPrefix            = "volume:"
 	egressRulesRoom             = "egress_rules"
+	llmSubscriptionsRoom        = "llm_subscriptions"
+	environmentsRoom            = "environments"
 	selfRoomIDSegment           = "me"
 )
 
@@ -42,6 +44,8 @@ const (
 	roomKindSandboxOrg
 	roomKindVolume
 	roomKindEgressRules
+	roomKindLLMSubscriptions
+	roomKindEnvironments
 )
 
 type subscriptionRoom struct {
@@ -100,6 +104,12 @@ func roomNames(rooms []subscriptionRoom) []string {
 func classifyRoom(room string, callerID uuid.UUID) (roomKind, uuid.UUID, string, string, error) {
 	if room == egressRulesRoom {
 		return roomKindEgressRules, uuid.UUID{}, "", egressRulesRoom, nil
+	}
+	if room == llmSubscriptionsRoom {
+		return roomKindLLMSubscriptions, uuid.UUID{}, "", llmSubscriptionsRoom, nil
+	}
+	if room == environmentsRoom {
+		return roomKindEnvironments, uuid.UUID{}, "", environmentsRoom, nil
 	}
 	if strings.HasPrefix(room, threadParticipantRoomPrefix) {
 		raw := strings.TrimSpace(strings.TrimPrefix(room, threadParticipantRoomPrefix))
