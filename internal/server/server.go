@@ -241,6 +241,13 @@ func (s *Server) authorizeSubscribeRooms(ctx context.Context, caller callerIdent
 			// -- publisher and subscriber both use the bare literal -- so there
 			// is no organization to check against. Named here so the default
 			// below does not silently cut the gateway off.
+		case roomKindLLMSubscriptions, roomKindEnvironments:
+			// The same shape as egress_rules and for the same reason: the LLM
+			// Proxy caches a native-mode binding on a connection and cannot
+			// enumerate the organizations or environments it will serve, so a
+			// per-organization room would leave it re-subscribing forever or
+			// missing invalidations for one it has not seen. Bare literals with
+			// no organization to check against.
 		case roomKindTrace, roomKindVolume:
 			// Both are specified as "member on the owning organization", and
 			// neither owner will say which organization that is: GetTrace
