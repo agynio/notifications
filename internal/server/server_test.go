@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -456,6 +457,7 @@ func TestSubscribeDeniesUnrelatedCaller(t *testing.T) {
 	for _, room := range []string{
 		"organization:" + uuid.NewString(),
 		"sandbox_org:" + uuid.NewString(),
+		"sandbox:" + uuid.NewString(),
 		"workload:" + uuid.NewString(),
 		"agent:" + uuid.NewString(),
 		"agent_instance:" + uuid.NewString(),
@@ -510,6 +512,74 @@ func TestSubscribeSandboxOwnerRoomIsOwnerOnly(t *testing.T) {
 	}
 	if _, err := streamClient.Recv(); status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// The per-sandbox room is what reaches a viewer the owner room cannot, and it
+// is stated against the sandbox itself -- no owner or organization lookup, the
+// way the workload and agent rooms need one.
+func TestSubscribeSandboxRoomChecksCanReadOnTheSandbox(t *testing.T) {
+	t.Parallel()
+
+	callerID := uuid.New()
+	sandboxID := uuid.New()
+	recorder := &recordingAuthz{}
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{},
+		server.WithAuthorization(recorder, allowAll{}, allowAll{}))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContext(callerID), 500*time.Millisecond)
+	defer cancel()
+
+	stream, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"sandbox:" + sandboxID.String()},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) == codes.PermissionDenied {
+		t.Fatal("a caller holding can_read was denied the sandbox room")
+	}
+
+	key := recorder.last()
+	if key == nil {
+		t.Fatal("the sandbox room was admitted without an authorization check")
+	}
+	if got, want := key.GetUser(), "identity:"+callerID.String(); got != want {
+		t.Errorf("checked user = %q, want %q", got, want)
+	}
+	if got, want := key.GetRelation(), "can_read"; got != want {
+		t.Errorf("checked relation = %q, want %q", got, want)
+	}
+	if got, want := key.GetObject(), "sandbox:"+sandboxID.String(); got != want {
+		t.Errorf("checked object = %q, want %q", got, want)
+	}
+}
+
+// sandbox_owner: and sandbox_org: are not prefixes of sandbox:, and each keeps
+// its own gate: identity equality and can_list_sandboxes respectively.
+func TestSubscribeSandboxRoomDoesNotSwallowTheOwnerRoom(t *testing.T) {
+	t.Parallel()
+
+	recorder := &recordingAuthz{}
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{},
+		server.WithAuthorization(recorder, allowAll{}, allowAll{}))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContext(uuid.New()), time.Second)
+	defer cancel()
+
+	stream, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"sandbox_owner:" + uuid.NewString()},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+	if key := recorder.last(); key != nil {
+		t.Errorf("sandbox_owner ran an authorization check against %q", key.GetObject())
 	}
 }
 
@@ -835,6 +905,27 @@ type denyAll struct{ allowAll }
 
 func (denyAll) Check(context.Context, *authorizationv1.CheckRequest, ...grpc.CallOption) (*authorizationv1.CheckResponse, error) {
 	return &authorizationv1.CheckResponse{Allowed: false}, nil
+}
+
+// recordingAuthz allows everything and keeps the last tuple it was asked
+// about, so a test can assert what the room was actually checked against.
+type recordingAuthz struct {
+	allowAll
+	mu    sync.Mutex
+	tuple *authorizationv1.TupleKey
+}
+
+func (r *recordingAuthz) Check(_ context.Context, req *authorizationv1.CheckRequest, _ ...grpc.CallOption) (*authorizationv1.CheckResponse, error) {
+	r.mu.Lock()
+	r.tuple = req.GetTupleKey()
+	r.mu.Unlock()
+	return &authorizationv1.CheckResponse{Allowed: true}, nil
+}
+
+func (r *recordingAuthz) last() *authorizationv1.TupleKey {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.tuple
 }
 
 // unavailableAuthz stands for an authorization service that cannot answer,

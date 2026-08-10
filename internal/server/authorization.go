@@ -36,14 +36,28 @@ type AgentReader interface {
 const (
 	identityObjectPrefix     = "identity:"
 	organizationObjectPrefix = "organization:"
+	sandboxObjectPrefix      = "sandbox:"
 
 	memberRelation           = "member"
 	canListSandboxesRelation = "can_list_sandboxes"
+	canReadRelation          = "can_read"
 )
 
 // requireOrganizationRelation resolves the caller's relation to an
 // organization. Nothing short of a definite yes admits the subscriber.
 func (s *Server) requireOrganizationRelation(ctx context.Context, caller uuid.UUID, organizationID uuid.UUID, relation string) error {
+	return s.requireRelation(ctx, caller, relation, organizationObjectPrefix+organizationID.String())
+}
+
+// requireSandboxRelation resolves the caller's relation to one sandbox. Unlike
+// the workload and agent rooms, this needs no owner lookup first: the sandbox
+// is itself an authorization object, carrying the owner and org tuples the
+// Agents service writes when it creates one.
+func (s *Server) requireSandboxRelation(ctx context.Context, caller uuid.UUID, sandboxID uuid.UUID, relation string) error {
+	return s.requireRelation(ctx, caller, relation, sandboxObjectPrefix+sandboxID.String())
+}
+
+func (s *Server) requireRelation(ctx context.Context, caller uuid.UUID, relation string, object string) error {
 	if s.authz == nil {
 		return status.Error(codes.Internal, "authorization is not configured")
 	}
@@ -51,7 +65,7 @@ func (s *Server) requireOrganizationRelation(ctx context.Context, caller uuid.UU
 		TupleKey: &authorizationv1.TupleKey{
 			User:     identityObjectPrefix + caller.String(),
 			Relation: relation,
-			Object:   organizationObjectPrefix + organizationID.String(),
+			Object:   object,
 		},
 	})
 	if err != nil {
