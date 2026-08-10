@@ -22,6 +22,7 @@ const (
 	traceRoomPrefix             = "trace:"
 	sandboxOwnerRoomPrefix      = "sandbox_owner:"
 	sandboxOrgRoomPrefix        = "sandbox_org:"
+	sandboxRoomPrefix           = "sandbox:"
 	volumeRoomPrefix            = "volume:"
 	egressRulesRoom             = "egress_rules"
 	llmSubscriptionsRoom        = "llm_subscriptions"
@@ -42,6 +43,7 @@ const (
 	roomKindTrace
 	roomKindSandboxOwner
 	roomKindSandboxOrg
+	roomKindSandbox
 	roomKindVolume
 	roomKindEgressRules
 	roomKindLLMSubscriptions
@@ -176,6 +178,14 @@ func classifyRoom(room string, callerID uuid.UUID) (roomKind, uuid.UUID, string,
 			return roomKindSandboxOrg, uuid.UUID{}, "", "", fmt.Errorf("sandbox_org: %w", err)
 		}
 		return roomKindSandboxOrg, id, "", sandboxOrgRoomPrefix + id.String(), nil
+	}
+	// The colon keeps this from swallowing sandbox_owner: and sandbox_org:, so
+	// the order among the three is readability only.
+	if id, matched, err := parseRoomUUID(room, sandboxRoomPrefix); matched {
+		if err != nil {
+			return roomKindSandbox, uuid.UUID{}, "", "", fmt.Errorf("sandbox: %w", err)
+		}
+		return roomKindSandbox, id, "", sandboxRoomPrefix + id.String(), nil
 	}
 	if id, matched, err := parseRoomUUID(room, volumeRoomPrefix); matched {
 		if err != nil {

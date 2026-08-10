@@ -197,6 +197,13 @@ func (s *Server) authorizeSubscribeRooms(ctx context.Context, caller callerIdent
 			if err := s.requireOrganizationRelation(ctx, caller.id, room.id, canListSandboxesRelation); err != nil {
 				return err
 			}
+		// One sandbox, keyed by the resource rather than its owner, so it also
+		// reaches the identities the owner room cannot: an organization owner
+		// watching a sandbox that is not theirs.
+		case roomKindSandbox:
+			if err := s.requireSandboxRelation(ctx, caller.id, room.id, canReadRelation); err != nil {
+				return err
+			}
 		case roomKindWorkload:
 			organizationID, err := s.workloadOrganization(ctx, room.id)
 			if err != nil {
