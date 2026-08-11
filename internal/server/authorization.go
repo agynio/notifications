@@ -37,11 +37,40 @@ const (
 	identityObjectPrefix     = "identity:"
 	organizationObjectPrefix = "organization:"
 	sandboxObjectPrefix      = "sandbox:"
+	clusterObject            = "cluster:global"
 
 	memberRelation           = "member"
 	canListSandboxesRelation = "can_list_sandboxes"
 	canReadRelation          = "can_read"
+	adminRelation            = "admin"
 )
+
+// platformRoomKinds are the rooms a verified platform caller may hold: the
+// operational state of the resources it places and reaps. Identity-keyed rooms
+// are deliberately absent -- instance_inbox, thread_participant and
+// sandbox_owner belong to a principal, and the platform starts and stops
+// workloads rather than reading what they exchange. A platform caller asking
+// for one of those falls through to the ordinary check, which refuses it.
+var platformRoomKinds = map[roomKind]struct{}{
+	roomKindAgentInstance:  {},
+	roomKindAgent:          {},
+	roomKindSandbox:        {},
+	roomKindSandboxOrg:     {},
+	roomKindWorkload:       {},
+	roomKindVolume:         {},
+	roomKindAgentInstances: {},
+	roomKindSandboxes:      {},
+	roomKindWorkloads:      {},
+}
+
+// requireClusterAdmin settles a platform caller's claim against OpenFGA. The
+// identity type arrives as metadata and is worth nothing on its own; the tuple
+// behind it is written by Identity for exactly one configured id and cannot be
+// requested, so this is the difference between a caller saying it is the
+// platform and it being so.
+func (s *Server) requireClusterAdmin(ctx context.Context, caller uuid.UUID) error {
+	return s.requireRelation(ctx, caller, adminRelation, clusterObject)
+}
 
 // requireOrganizationRelation resolves the caller's relation to an
 // organization. Nothing short of a definite yes admits the subscriber.
