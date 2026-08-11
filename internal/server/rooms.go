@@ -27,7 +27,17 @@ const (
 	egressRulesRoom             = "egress_rules"
 	llmSubscriptionsRoom        = "llm_subscriptions"
 	environmentsRoom            = "environments"
-	selfRoomIDSegment           = "me"
+	// Flat, and deliberately not keyed by organization. The Orchestrator
+	// reconciles every instance, sandbox and workload in the cluster, so a room set
+	// derived from the organizations it can currently see is a race with the
+	// event that would have told it a new one exists. These three are constant
+	// for the life of the process, so there is nothing to miss and nothing to
+	// re-derive. Unlike the three above they carry every organization's
+	// lifecycle, so they are the platform's alone -- see authorizeSubscribeRooms.
+	agentInstancesRoom = "agent_instances"
+	sandboxesRoom      = "sandboxes"
+	workloadsRoom      = "workloads"
+	selfRoomIDSegment  = "me"
 )
 
 type roomKind int
@@ -48,6 +58,9 @@ const (
 	roomKindEgressRules
 	roomKindLLMSubscriptions
 	roomKindEnvironments
+	roomKindAgentInstances
+	roomKindSandboxes
+	roomKindWorkloads
 )
 
 type subscriptionRoom struct {
@@ -112,6 +125,19 @@ func classifyRoom(room string, callerID uuid.UUID) (roomKind, uuid.UUID, string,
 	}
 	if room == environmentsRoom {
 		return roomKindEnvironments, uuid.UUID{}, "", environmentsRoom, nil
+	}
+	// Ahead of the prefix matches below, as the three above are. Neither name
+	// carries the colon its per-entity prefix ends with, so they cannot be
+	// swallowed by one, but settling the literals first keeps that a fact about
+	// this function rather than about the constants.
+	if room == agentInstancesRoom {
+		return roomKindAgentInstances, uuid.UUID{}, "", agentInstancesRoom, nil
+	}
+	if room == sandboxesRoom {
+		return roomKindSandboxes, uuid.UUID{}, "", sandboxesRoom, nil
+	}
+	if room == workloadsRoom {
+		return roomKindWorkloads, uuid.UUID{}, "", workloadsRoom, nil
 	}
 	if strings.HasPrefix(room, threadParticipantRoomPrefix) {
 		raw := strings.TrimSpace(strings.TrimPrefix(room, threadParticipantRoomPrefix))

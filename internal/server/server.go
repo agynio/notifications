@@ -126,7 +126,10 @@ type callerIdentity struct {
 	identityType string
 }
 
-const agentInstanceIdentityType = "agent_instance"
+const (
+	agentInstanceIdentityType = "agent_instance"
+	platformIdentityType      = "platform"
+)
 
 func identityIDFromContext(ctx context.Context) (uuid.UUID, error) {
 	md, ok := metadata.FromIncomingContext(ctx)
@@ -174,7 +177,24 @@ func callerIdentityFromContext(ctx context.Context) (callerIdentity, error) {
 // by equality; every other room is gated on the caller's relation to the
 // organization that owns the entity the room reports on.
 func (s *Server) authorizeSubscribeRooms(ctx context.Context, caller callerIdentity, rooms []subscriptionRoom) error {
+	// A platform caller is the platform itself -- the Orchestrator watching what
+	// it places -- rather than a principal acting through it. It used to have no
+	// way to say so, and borrowed an agent instance's id to pass checks written
+	// for that instance. The claim is not taken on faith here: it stands only if
+	// the identity really carries admin on the cluster.
+	platform := false
+	if caller.identityType == platformIdentityType {
+		if err := s.requireClusterAdmin(ctx, caller.id); err != nil {
+			return err
+		}
+		platform = true
+	}
 	for _, room := range rooms {
+		if platform {
+			if _, ok := platformRoomKinds[room.kind]; ok {
+				continue
+			}
+		}
 		switch room.kind {
 		case roomKindThreadParticipant:
 			if room.id != caller.id {
@@ -255,6 +275,12 @@ func (s *Server) authorizeSubscribeRooms(ctx context.Context, caller callerIdent
 			// per-organization room would leave it re-subscribing forever or
 			// missing invalidations for one it has not seen. Bare literals with
 			// no organization to check against.
+		// Reached only by a caller that is not the platform: a verified one
+		// never gets here, having been admitted above. These two carry every
+		// organization's lifecycle in one room, with no id to check a caller
+		// against, so there is no relation that would make them anyone else's.
+		case roomKindAgentInstances, roomKindSandboxes, roomKindWorkloads:
+			return status.Error(codes.PermissionDenied, "permission denied")
 		case roomKindTrace, roomKindVolume:
 			// Both are specified as "member on the owning organization", and
 			// neither owner will say which organization that is: GetTrace

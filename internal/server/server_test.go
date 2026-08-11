@@ -1025,6 +1025,176 @@ func TestSubscribeDeniesAnInstanceAnotherInstancesRoom(t *testing.T) {
 	}
 }
 
+// The Orchestrator watches the sandboxes it reconciles across every
+// organization. It used to borrow an agent instance's identity to do it, which
+// could never satisfy can_list_sandboxes; as itself it holds cluster admin.
+func TestSubscribeSandboxOrgRoomAllowsPlatform(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(2, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContextWithType(uuid.New(), "platform"), time.Second)
+	defer cancel()
+
+	if _, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"sandbox_org:" + uuid.NewString()},
+	}); err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+}
+
+// The identity type is metadata and worth nothing by itself. What admits a
+// platform caller is the cluster admin tuple behind it, so that is what the
+// room must be settled against.
+func TestSubscribePlatformIsCheckedAgainstClusterAdmin(t *testing.T) {
+	t.Parallel()
+
+	callerID := uuid.New()
+	recorder := &recordingAuthz{}
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{},
+		server.WithAuthorization(recorder, allowAll{}, allowAll{}))
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContextWithType(callerID, "platform"), 500*time.Millisecond)
+	defer cancel()
+
+	stream, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"agent_instance:" + uuid.NewString()},
+	})
+	if err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+	if _, err = stream.Recv(); status.Code(err) == codes.PermissionDenied {
+		t.Fatal("a platform caller holding cluster admin was denied the agent instance room")
+	}
+
+	tuple := recorder.last()
+	if tuple == nil {
+		t.Fatal("expected an authorization check")
+	}
+	if tuple.GetUser() != "identity:"+callerID.String() {
+		t.Fatalf("expected the caller as user, got %q", tuple.GetUser())
+	}
+	if tuple.GetRelation() != "admin" || tuple.GetObject() != "cluster:global" {
+		t.Fatalf("expected admin on cluster:global, got %q on %q", tuple.GetRelation(), tuple.GetObject())
+	}
+}
+
+// Claiming the type is not holding the relation. Anything on the mesh can set
+// the header, so a caller that does not actually carry cluster admin gets
+// nothing from saying it is the platform.
+func TestSubscribePlatformWithoutClusterAdminDenied(t *testing.T) {
+	t.Parallel()
+
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{},
+		server.WithAuthorization(denyAll{}, allowAll{}, allowAll{}))
+	defer cleanup()
+
+	ctx := authenticatedContextWithType(uuid.New(), "platform")
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"sandbox_org:" + uuid.NewString()},
+	})
+	if err == nil {
+		_, err = streamClient.Recv()
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// Cluster admin buys the operational rooms, not the private ones. The platform
+// places workloads; it has no business in the inbox one is reading from.
+func TestSubscribePlatformStillDeniedInstanceInbox(t *testing.T) {
+	t.Parallel()
+
+	client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{})
+	defer cleanup()
+
+	ctx := authenticatedContextWithType(uuid.New(), "platform")
+	streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{fmt.Sprintf("instance_inbox:%s", uuid.New())},
+	})
+	if err == nil {
+		_, err = streamClient.Recv()
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+}
+
+// The rooms the Orchestrator actually holds. Constant names, so its coverage
+// no longer depends on which organizations it managed to enumerate first.
+func TestSubscribeFlatPlatformRoomsAllowPlatform(t *testing.T) {
+	t.Parallel()
+
+	hub := stream.NewHub(2, zap.NewNop())
+	client, cleanup := startTestServer(t, &publisherStub{}, hub)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(authenticatedContextWithType(uuid.New(), "platform"), time.Second)
+	defer cancel()
+
+	if _, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{
+		Rooms: []string{"agent_instances", "sandboxes"},
+	}); err != nil {
+		t.Fatalf("Subscribe returned error: %v", err)
+	}
+}
+
+// One room per cluster, carrying every organization's lifecycle. Nobody but the
+// platform has any business holding it, and there is no id in the name to check
+// an ordinary caller against.
+func TestSubscribeFlatPlatformRoomsDenyEveryoneElse(t *testing.T) {
+	t.Parallel()
+
+	for _, room := range []string{"agent_instances", "sandboxes"} {
+		room := room
+		t.Run(room, func(t *testing.T) {
+			t.Parallel()
+
+			client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{})
+			defer cleanup()
+
+			// A permissive authorizer, to show the refusal is the room's own and
+			// not a check that happened to fail.
+			ctx := authenticatedContextWithType(uuid.New(), "agent_instance")
+			streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+			if err == nil {
+				_, err = streamClient.Recv()
+			}
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+			}
+		})
+	}
+}
+
+// Same boundary, stated for the rooms a person's own client holds.
+func TestSubscribePlatformStillDeniedPrincipalRooms(t *testing.T) {
+	t.Parallel()
+
+	for _, room := range []string{"thread_participant:" + uuid.NewString(), "sandbox_owner:" + uuid.NewString()} {
+		room := room
+		t.Run(room, func(t *testing.T) {
+			t.Parallel()
+
+			client, cleanup := startTestServer(t, &publisherStub{}, &noopHub{})
+			defer cleanup()
+
+			ctx := authenticatedContextWithType(uuid.New(), "platform")
+			streamClient, err := client.Subscribe(ctx, &notificationsv1.SubscribeRequest{Rooms: []string{room}})
+			if err == nil {
+				_, err = streamClient.Recv()
+			}
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("expected PermissionDenied, got %v (%v)", status.Code(err), err)
+			}
+		})
+	}
+}
+
 func startTestServer(t *testing.T, publisher server.Publisher, hub server.SubscriptionHub, opts ...server.Option) (notificationsv1.NotificationsServiceClient, func()) {
 	t.Helper()
 

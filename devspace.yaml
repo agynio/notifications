@@ -21,6 +21,12 @@ functions:
           containers:
             - name: notifications
               image: ghcr.io/agynio/devcontainer-go:1 # keep in sync with E2E_IMAGE
+              # Both probes go, or nothing ever starts: DevSpace waits for the
+              # pod to be ready before it syncs, the container waits for the
+              # sync before it listens, and the liveness probe kills it at 40s
+              # -- so the sync it is waiting for never arrives.
+              livenessProbe: null
+              readinessProbe: null
               workingDir: /opt/app/data
               command:
                 - sh
@@ -70,8 +76,11 @@ deployments:
           app.kubernetes.io/name: notifications-e2e
 
 commands:
-  test:e2e: |-
-    devspace run-pipeline test:e2e $@
+  # Neither a command nor a pipeline may carry a colon: DevSpace validates both
+  # against ^[a-z0-9][a-z0-9-]*[a-z0-9]$ and refuses to load the whole file when
+  # one does, which took `devspace dev` down with it.
+  test-e2e: |-
+    devspace run-pipeline test-e2e $@
 
 pipelines:
   dev:
@@ -102,7 +111,7 @@ pipelines:
         stop_dev notifications
       fi
 
-  test:e2e:
+  test-e2e:
     run: |-
       create_deployments e2e-runner
       start_dev e2e-runner &
