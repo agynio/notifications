@@ -25,6 +25,7 @@ const (
 	sandboxRoomPrefix           = "sandbox:"
 	volumeRoomPrefix            = "volume:"
 	egressRulesRoom             = "egress_rules"
+	privateResourcesRoom        = "private_resources"
 	llmSubscriptionsRoom        = "llm_subscriptions"
 	environmentsRoom            = "environments"
 	// Flat, and deliberately not keyed by organization. The Orchestrator
@@ -56,6 +57,7 @@ const (
 	roomKindSandbox
 	roomKindVolume
 	roomKindEgressRules
+	roomKindPrivateResources
 	roomKindLLMSubscriptions
 	roomKindEnvironments
 	roomKindAgentInstances
@@ -119,6 +121,9 @@ func roomNames(rooms []subscriptionRoom) []string {
 func classifyRoom(room string, callerID uuid.UUID) (roomKind, uuid.UUID, string, string, error) {
 	if room == egressRulesRoom {
 		return roomKindEgressRules, uuid.UUID{}, "", egressRulesRoom, nil
+	}
+	if room == privateResourcesRoom {
+		return roomKindPrivateResources, uuid.UUID{}, "", privateResourcesRoom, nil
 	}
 	if room == llmSubscriptionsRoom {
 		return roomKindLLMSubscriptions, uuid.UUID{}, "", llmSubscriptionsRoom, nil
