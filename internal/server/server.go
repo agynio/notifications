@@ -268,6 +268,11 @@ func (s *Server) authorizeSubscribeRooms(ctx context.Context, caller callerIdent
 			// -- publisher and subscriber both use the bare literal -- so there
 			// is no organization to check against. Named here so the default
 			// below does not silently cut the gateway off.
+		case roomKindPrivateResources:
+			// The same shape for the same subscriber: private_resource.updated
+			// invalidates the resource fields the Egress Gateway caches
+			// alongside private-target rules, and the gateway cannot enumerate
+			// the organizations it serves.
 		case roomKindLLMSubscriptions, roomKindEnvironments:
 			// The same shape as egress_rules and for the same reason: the LLM
 			// Proxy caches a native-mode binding on a connection and cannot
